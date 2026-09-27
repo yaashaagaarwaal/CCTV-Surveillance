@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import CameraGrid from './components/CameraGrid'
 
 function App() {
   const [status, setStatus] = useState('checking...')
@@ -25,7 +26,7 @@ function App() {
         </h1>
       </header>
 
-      <main className="p-6">
+      <main className="space-y-6 p-6">
         <div className="rounded-lg border border-slate-800 bg-slate-900 p-6">
           <h2 className="mb-2 text-sm font-medium text-slate-400">
             Backend status
@@ -38,6 +39,11 @@ function App() {
             />
             <span className="text-lg font-medium">{status}</span>
           </div>
+        </div>
+
+        <div>
+          <h2 className="mb-3 text-sm font-medium text-slate-400">Cameras</h2>
+          <CameraGrid />
         </div>
       </main>
     </div>
