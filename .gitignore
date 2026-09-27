@@ -1,0 +1,18 @@
+# Python
+backend/venv/
+__pycache__/
+*.pyc
+backend/data/*.db
+
+# Recorded footage / captured frames (never commit surveillance video)
+backend/app/storage/**
+!backend/app/storage/.gitkeep
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
