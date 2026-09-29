@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import CameraGrid from './components/CameraGrid'
+import EventHistory from './components/EventHistory'
 
 function App() {
   const [status, setStatus] = useState('checking...')
@@ -44,6 +45,13 @@ function App() {
         <div>
           <h2 className="mb-3 text-sm font-medium text-slate-400">Cameras</h2>
           <CameraGrid />
+        </div>
+
+        <div>
+          <h2 className="mb-3 text-sm font-medium text-slate-400">
+            Recent motion events
+          </h2>
+          <EventHistory />
         </div>
       </main>
     </div>
