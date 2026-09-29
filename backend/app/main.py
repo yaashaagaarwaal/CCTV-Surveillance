@@ -4,8 +4,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import cameras, health
+from app.api import cameras, events, health
 from app.core.config import settings
+from app.db.session import init_db
 from app.services.camera.manager import (
     camera_manager,
     init_cameras_from_settings,
@@ -17,6 +18,7 @@ logging.basicConfig(level=logging.INFO)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    init_db()
     warmup_camera_permissions(settings.cameras)
     init_cameras_from_settings(settings.cameras)
     camera_manager.start_all()
@@ -36,6 +38,7 @@ app.add_middleware(
 
 app.include_router(health.router, prefix=settings.api_v1_prefix)
 app.include_router(cameras.router, prefix=settings.api_v1_prefix)
+app.include_router(events.router, prefix=settings.api_v1_prefix)
 
 
 @app.get("/")
