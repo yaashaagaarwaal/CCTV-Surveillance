@@ -4,13 +4,14 @@ import time
 
 import cv2
 
+from app.core.config import settings
 from app.services.camera.base import BaseCamera, CameraStatus
 from app.services.camera.opencv_camera import OpenCVCamera
+from app.services.recording.pipeline import MotionEventPipeline
 
 logger = logging.getLogger(__name__)
 
 RETRY_INTERVAL_SECONDS = 3.0
-CAPTURE_FPS_CAP = 20
 JPEG_QUALITY = 80
 
 
@@ -23,9 +24,10 @@ class CameraWorker:
     or the server itself — the thread just keeps retrying in the background.
     """
 
-    def __init__(self, camera: BaseCamera):
+    def __init__(self, camera: BaseCamera, motion_pipeline: MotionEventPipeline):
         self.camera = camera
         self.status = CameraStatus.CONNECTING
+        self._motion_pipeline = motion_pipeline
         self._latest_jpeg: bytes | None = None
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -45,6 +47,7 @@ class CameraWorker:
         if self._thread is not None:
             self._thread.join(timeout=5)
         self.camera.release()
+        self._motion_pipeline.close()
 
     def get_status(self) -> CameraStatus:
         with self._lock:
@@ -59,7 +62,7 @@ class CameraWorker:
             self.status = status
 
     def _run(self) -> None:
-        min_frame_interval = 1.0 / CAPTURE_FPS_CAP
+        min_frame_interval = 1.0 / settings.capture_fps
         while not self._stop_event.is_set():
             if not self.camera.is_opened():
                 self._set_status(CameraStatus.CONNECTING)
@@ -85,12 +88,21 @@ class CameraWorker:
                 logger.warning("Camera %s read failed, marking offline and retrying", self.camera_id)
                 self._set_status(CameraStatus.OFFLINE)
                 self.camera.release()
+                self._motion_pipeline.close()  # finalize any in-progress recording as "interrupted"
                 with self._lock:
                     self._latest_jpeg = None
                 self._stop_event.wait(RETRY_INTERVAL_SECONDS)
                 continue
 
             self._set_status(CameraStatus.ONLINE)
+
+            try:
+                self._motion_pipeline.process(frame)
+            except Exception:
+                # A bug in motion detection/recording must never take down
+                # capture or the live stream for this (or any other) camera.
+                logger.exception("Motion/recording pipeline error for camera %s", self.camera_id)
+
             encode_ok, buffer = cv2.imencode(
                 ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
             )
@@ -116,7 +128,8 @@ class CameraManager:
         self._workers: dict[str, CameraWorker] = {}
 
     def register(self, camera: BaseCamera) -> None:
-        self._workers[camera.camera_id] = CameraWorker(camera)
+        pipeline = MotionEventPipeline(camera_id=camera.camera_id)
+        self._workers[camera.camera_id] = CameraWorker(camera, pipeline)
 
     def start_all(self) -> None:
         for worker in self._workers.values():
