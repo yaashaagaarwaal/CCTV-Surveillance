@@ -18,6 +18,7 @@ def _serialize(event: Event) -> dict:
         "ended_at": event.ended_at.isoformat() if event.ended_at else None,
         "status": event.status,
         "has_recording": bool(event.recording_path),
+        "max_confidence": event.max_confidence,
     }
 
 
@@ -29,11 +30,17 @@ def _get_event_or_404(session, event_id: int) -> Event:
 
 
 @router.get("")
-def list_events(camera_id: str | None = None, limit: int = Query(50, ge=1, le=200)):
+def list_events(
+    camera_id: str | None = None,
+    event_type: str | None = None,
+    limit: int = Query(50, ge=1, le=200),
+):
     with SessionLocal() as session:
         stmt = select(Event).order_by(Event.timestamp.desc()).limit(limit)
         if camera_id:
             stmt = stmt.where(Event.camera_id == camera_id)
+        if event_type:
+            stmt = stmt.where(Event.event_type == event_type)
         events = session.scalars(stmt).all()
         return [_serialize(e) for e in events]
 
