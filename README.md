@@ -11,20 +11,22 @@ The system combines **computer vision, real-time video processing, event-based r
 * 📹 **Live CCTV Streaming**
 * 📷 **Multi-Camera Support** — Webcam and RTSP/IP cameras
 * 🏃 **Motion Detection** using OpenCV MOG2
+* 🧍 **YOLO Person Detection** — bounding boxes + confidence, on the live feed
 * 🎥 **Event-Based Video Recording**
-* 🗄️ **SQLite Event History**
+* 🗄️ **SQLite Event History** — motion events and person-detection events
 * ▶️ **Video Playback & Download**
 * 🟢 **Camera Online/Offline Monitoring**
 * 🔄 **Automatic Camera Reconnection**
-* ⚡ **Background Camera Processing**
-* 🤖 Extensible AI pipeline for intelligent surveillance
+* ⚡ **Background Camera + AI Processing** — never blocks the live stream
 * 🔔 Designed for real-time security alerts and event classification
 
 ---
 
 ## 🧠 AI Surveillance Pipeline
 
-The system is designed to evolve from basic motion detection into an intelligent computer-vision surveillance pipeline:
+Motion detection gates YOLO (cheap check first, expensive model only when
+something is actually happening), and detections feed the same event/
+recording system motion already uses:
 
 ```text
               CCTV / IP Camera
@@ -33,33 +35,36 @@ The system is designed to evolve from basic motion detection into an intelligent
              Frame Acquisition
                      │
                      ▼
-             Motion Detection
+             Motion Detection        ◄── implemented (OpenCV MOG2)
                 (OpenCV)
                      │
+              (only while recording,
+               every Nth frame)
                      ▼
-             Object Detection
-                 (YOLO)
+             YOLO Object Detection   ◄── implemented (YOLOv8n, "person" class only)
                      │
               ┌──────┴──────┐
               │             │
-           Person        Other Object
-              │
+           Person        (ignored —
+              │           only "person" is
+              │            security-relevant
+              │            for now)
               ▼
-        Face Recognition
+        Face Recognition          ◄── planned (Phase 6)
               │
         ┌─────┴─────┐
         │           │
       Known       Unknown
         │           │
         ▼           ▼
-    Log Event    Trigger Alert
+    Log Event    Trigger Alert    ◄── real-time push alerts planned (Phase 7)
         │           │
         └─────┬─────┘
               ▼
-        Event Database
+        Event Database (SQLite)   ◄── implemented (events + person_detections)
               │
               ▼
-        React Dashboard
+        React Dashboard           ◄── implemented (live feed, boxes, event history)
 ```
 
 ---
@@ -70,23 +75,28 @@ The system is designed to evolve from basic motion detection into an intelligent
 CCTV / IP Cameras
         │
         ▼
- Camera Manager
-        │
-        ├──────────────► Live MJPEG Stream
+ Camera Manager (one background thread per camera)
         │
         ▼
- Motion Detection
+ Motion Detection (OpenCV MOG2)
+        │
+        ├── no motion ──► Live MJPEG Stream (raw frame)
+        │
+        ▼ motion found
+ YOLO Person Detection (every Nth frame, MPS-accelerated)
+        │
+        ├──────────────► Live MJPEG Stream (frame + boxes + confidence)
         │
         ▼
- Event Recording
+ Event Recording (H.264 .mp4)
         │
-        ├──────────────► Video Storage
-        │
-        ▼
- SQLite Event Database
+        ├──────────────► Video Storage (organized by camera/date)
         │
         ▼
- React Dashboard
+ SQLite Event Database (events + person_detections)
+        │
+        ▼
+ React Dashboard (live feed, event history, playback)
 ```
 
 ---
@@ -109,10 +119,9 @@ CCTV / IP Cameras
 
 ### Computer Vision
 
-* OpenCV MOG2
-* Background Subtraction
-* YOLO *(AI detection layer)*
-* Face Recognition *(planned AI layer)*
+* OpenCV MOG2 background subtraction (motion detection)
+* YOLOv8n via Ultralytics — person detection, MPS-accelerated on Apple Silicon
+* Face Recognition *(planned, Phase 6)*
 
 ### Storage
 
@@ -127,14 +136,16 @@ CCTV / IP Cameras
 CCTV-Surveillance/
 │
 ├── backend/
+│   ├── models/              YOLO weights (auto-downloaded, gitignored)
 │   ├── app/
 │   │   ├── api/
 │   │   ├── core/
-│   │   ├── db/
+│   │   ├── db/                 events + person_detections tables
 │   │   ├── services/
 │   │   │   ├── camera/
 │   │   │   ├── motion/
-│   │   │   └── recording/
+│   │   │   ├── detection/      YOLOv8 person detector
+│   │   │   └── recording/      motion→YOLO→recording pipeline
 │   │   └── main.py
 │   └── requirements.txt
 │
@@ -179,11 +190,31 @@ API documentation:
 http://127.0.0.1:8000/docs
 ```
 
+> **First run:** macOS will prompt for camera permission — click **Allow**
+> (run the backend in a normal foreground terminal the first time so the
+> dialog can appear). Startup also takes a few extra seconds while YOLO
+> downloads its weights (first run only, ~6 MB) and warms up the model.
+
 ---
+
+## ⚙️ YOLO Detection Settings
+
+All in `backend/app/core/config.py`, under `Settings.detection`:
+
+| Setting | Default | Effect |
+|---|---|---|
+| `enabled` | `true` | Turns person detection on/off. If the model fails to load, this auto-disables per-camera and motion/recording keep working. |
+| `confidence_threshold` | `0.5` | Minimum confidence (0–1) to count as a real person. |
+| `imgsz` | `320` | Inference resolution — smaller is faster, less precise. |
+| `run_every_n_frames` | `5` | YOLO only runs on every Nth frame **while a motion recording is already active** — the main cost control, so the model never runs at all on an idle scene. |
+| `model_path` | `backend/models/yolov8n.pt` | Auto-downloaded on first run if missing. |
+
+Restart the backend after changing any of these. Model inference uses
+Apple Silicon's MPS GPU backend automatically when available (falls back to
+CPU otherwise) — check the startup log for `YOLO model ready on device=mps`.
 
 ## 🔮 Future Enhancements
 
-* 🎯 YOLO-based person and object detection
 * 👤 Face recognition
 * 🚨 Unknown-person alerts
 * 📡 Real-time WebSocket notifications
