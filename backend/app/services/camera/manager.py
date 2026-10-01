@@ -57,6 +57,9 @@ class CameraWorker:
         with self._lock:
             return self._latest_jpeg
 
+    def get_live_detections(self) -> list:
+        return self._motion_pipeline.get_live_detections()
+
     def _set_status(self, status: CameraStatus) -> None:
         with self._lock:
             self.status = status
@@ -143,14 +146,19 @@ class CameraManager:
         return self._workers.get(camera_id)
 
     def list_status(self) -> list[dict]:
-        return [
-            {
-                "id": worker.camera_id,
-                "name": worker.camera.name,
-                "status": worker.get_status().value,
-            }
-            for worker in self._workers.values()
-        ]
+        result = []
+        for worker in self._workers.values():
+            detections = worker.get_live_detections()
+            result.append(
+                {
+                    "id": worker.camera_id,
+                    "name": worker.camera.name,
+                    "status": worker.get_status().value,
+                    "people_detected": len(detections),
+                    "detections": [{"confidence": d.confidence, "bbox": d.bbox} for d in detections],
+                }
+            )
+        return result
 
 
 camera_manager = CameraManager()
