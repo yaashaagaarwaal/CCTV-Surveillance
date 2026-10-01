@@ -40,6 +40,26 @@ class MotionConfig(BaseModel):
     warmup_frames: int = 30
 
 
+class DetectionConfig(BaseModel):
+    enabled: bool = True
+    # yolov8n = "nano", the smallest/fastest YOLOv8 model — right fit for
+    # running alongside live capture on a laptop CPU/GPU rather than a
+    # dedicated inference server. Auto-downloaded to `model_path` on first
+    # run if not already present.
+    model_path: Path = BASE_DIR / "models" / "yolov8n.pt"
+    # Minimum confidence (0-1) for a detection to count as a real person.
+    confidence_threshold: float = 0.5
+    # Inference resolution. Smaller = faster but less accurate; 320 is a
+    # good speed/accuracy trade-off for a person standing in webcam framing
+    # distance (YOLOv8's own default is 640).
+    imgsz: int = 320
+    # Only run YOLO on every Nth frame *while a motion recording is already
+    # active* (see MotionEventPipeline) — this is the main cost control:
+    # the expensive model never runs at all while the scene is idle, and
+    # even during a recording it isn't run on every single frame.
+    run_every_n_frames: int = 5
+
+
 class Settings(BaseSettings):
     app_name: str = "Smart AI CCTV Surveillance"
     api_v1_prefix: str = "/api"
@@ -55,6 +75,7 @@ class Settings(BaseSettings):
         CameraConfig(id="cam1", name="Local Webcam", source=0),
     ]
     motion: MotionConfig = MotionConfig()
+    detection: DetectionConfig = DetectionConfig()
 
 
 settings = Settings()
