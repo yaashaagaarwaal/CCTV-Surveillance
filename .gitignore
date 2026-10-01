@@ -9,6 +9,9 @@ backend/data/*.db
 backend/app/storage/**
 !backend/app/storage/.gitkeep
 
+# YOLO model weights (auto-downloaded on first run, don't commit binaries)
+backend/models/*.pt
+
 # Node / frontend
 frontend/node_modules/
 frontend/dist/
