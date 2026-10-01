@@ -5,6 +5,11 @@ const STATUS_STYLES = {
   interrupted: 'bg-orange-500/20 text-orange-400',
 }
 
+const TYPE_STYLES = {
+  person: 'bg-blue-500/20 text-blue-400',
+  motion: 'bg-slate-700 text-slate-300',
+}
+
 function formatDuration(event) {
   if (!event.ended_at) return event.status === 'recording' ? 'in progress…' : '—'
   const seconds = Math.round((new Date(event.ended_at) - new Date(event.timestamp)) / 1000)
@@ -17,6 +22,18 @@ function EventRow({ event, cameraName, onView }) {
       <td className="py-2 pr-4 text-sm text-slate-300">{cameraName ?? event.camera_id}</td>
       <td className="py-2 pr-4 text-sm text-slate-400">
         {new Date(event.timestamp).toLocaleString()}
+      </td>
+      <td className="py-2 pr-4">
+        <span
+          className={`rounded px-2 py-0.5 text-xs font-medium uppercase ${
+            TYPE_STYLES[event.event_type] ?? 'bg-slate-700 text-slate-300'
+          }`}
+        >
+          {event.event_type}
+        </span>
+      </td>
+      <td className="py-2 pr-4 text-sm text-slate-400">
+        {event.max_confidence != null ? `${Math.round(event.max_confidence * 100)}%` : '—'}
       </td>
       <td className="py-2 pr-4 text-sm text-slate-400">{formatDuration(event)}</td>
       <td className="py-2 pr-4">

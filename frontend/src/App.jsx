@@ -49,7 +49,7 @@ function App() {
 
         <div>
           <h2 className="mb-3 text-sm font-medium text-slate-400">
-            Recent motion events
+            Recent events
           </h2>
           <EventHistory />
         </div>
