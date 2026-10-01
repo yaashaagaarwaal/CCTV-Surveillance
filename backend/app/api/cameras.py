@@ -27,10 +27,13 @@ def list_cameras():
 @router.get("/{camera_id}/status")
 def camera_status(camera_id: str):
     worker = _get_worker_or_404(camera_id)
+    detections = worker.get_live_detections()
     return {
         "id": worker.camera_id,
         "name": worker.camera.name,
         "status": worker.get_status().value,
+        "people_detected": len(detections),
+        "detections": [{"confidence": d.confidence, "bbox": d.bbox} for d in detections],
     }
 
 
