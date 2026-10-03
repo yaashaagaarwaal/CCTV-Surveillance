@@ -20,3 +20,14 @@ frontend/dist/
 .DS_Store
 .vscode/
 .idea/
+
+# Generated demo camera videos (python scripts/make_demo_videos.py)
+backend/sample_videos/*
+!backend/sample_videos/.gitkeep
+
+# Face recognition models (auto-downloaded)
+backend/models/*.onnx
+
+# Secrets and local config — never commit
+backend/.env
+backend/data/.secret_key
