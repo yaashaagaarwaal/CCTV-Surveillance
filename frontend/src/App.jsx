@@ -1,61 +1,42 @@
-import { useEffect, useState } from 'react'
-import CameraGrid from './components/CameraGrid'
-import EventHistory from './components/EventHistory'
+import { Route, Routes } from 'react-router-dom'
+import AppLayout from './components/layout/AppLayout'
+import { Spinner } from './components/ui'
+import { useAuth } from './hooks/useAuth'
+import AlertsPage from './pages/AlertsPage'
+import CamerasPage from './pages/CamerasPage'
+import DashboardPage from './pages/DashboardPage'
+import EventsPage from './pages/EventsPage'
+import LoginPage from './pages/LoginPage'
+import NotFoundPage from './pages/NotFoundPage'
+import PeoplePage from './pages/PeoplePage'
+import RecordingsPage from './pages/RecordingsPage'
+import UsersPage from './pages/UsersPage'
 
-function App() {
-  const [status, setStatus] = useState('checking...')
-  const [isOnline, setIsOnline] = useState(false)
+export default function App() {
+  const { status, isAdmin } = useAuth()
 
-  useEffect(() => {
-    fetch('/api/health')
-      .then((res) => res.json())
-      .then((data) => {
-        setStatus(data.status)
-        setIsOnline(true)
-      })
-      .catch(() => {
-        setStatus('backend unreachable')
-        setIsOnline(false)
-      })
-  }, [])
+  if (status === 'loading') {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950">
+        <Spinner className="h-8 w-8" />
+      </div>
+    )
+  }
+  // Nothing of the dashboard is rendered (and no API call is made) until signed in.
+  if (status !== 'authenticated') return <LoginPage />
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
-      <header className="border-b border-slate-800 px-6 py-4">
-        <h1 className="text-xl font-semibold tracking-tight">
-          Smart AI CCTV Surveillance
-        </h1>
-      </header>
-
-      <main className="space-y-6 p-6">
-        <div className="rounded-lg border border-slate-800 bg-slate-900 p-6">
-          <h2 className="mb-2 text-sm font-medium text-slate-400">
-            Backend status
-          </h2>
-          <div className="flex items-center gap-2">
-            <span
-              className={`h-2.5 w-2.5 rounded-full ${
-                isOnline ? 'bg-green-500' : 'bg-red-500'
-              }`}
-            />
-            <span className="text-lg font-medium">{status}</span>
-          </div>
-        </div>
-
-        <div>
-          <h2 className="mb-3 text-sm font-medium text-slate-400">Cameras</h2>
-          <CameraGrid />
-        </div>
-
-        <div>
-          <h2 className="mb-3 text-sm font-medium text-slate-400">
-            Recent events
-          </h2>
-          <EventHistory />
-        </div>
-      </main>
-    </div>
+    <Routes>
+      <Route element={<AppLayout />}>
+        <Route index element={<DashboardPage />} />
+        <Route path="cameras" element={<CamerasPage />} />
+        <Route path="alerts" element={<AlertsPage />} />
+        <Route path="events" element={<EventsPage />} />
+        <Route path="recordings" element={<RecordingsPage />} />
+        <Route path="people" element={<PeoplePage />} />
+        {isAdmin && <Route path="users" element={<UsersPage />} />}
+        <Route path="*" element={<NotFoundPage />} />
+      </Route>
+    </Routes>
   )
 }
-
-export default App
