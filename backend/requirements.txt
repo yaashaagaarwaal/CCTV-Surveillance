@@ -18,5 +18,7 @@ numpy==1.26.4
 # automatically for GPU-accelerated inference (see services/detection/detector.py).
 ultralytics==8.3.55
 
-# --- Later phases (uncomment as we build them) ---
-# face-recognition==1.3.0        # face recognition (needs dlib + cmake)
+# --- Phase 6: face recognition ---
+# No new packages: face detection (YuNet) and recognition (SFace) run through
+# OpenCV's built-in DNN module; the two ~39 MB model files are downloaded to
+# backend/models/ on first start.
