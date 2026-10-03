@@ -1,0 +1,21 @@
+# Reverse proxy with automatic HTTPS (Caddy). Example only — read README "Remote monitoring" first.
+#
+# Layout assumed:  browser --HTTPS--> Caddy (this file) --HTTP, same machine--> uvicorn on 127.0.0.1:8000
+# uvicorn stays bound to 127.0.0.1, so the app itself is never directly reachable from the network.
+
+cctv.example.com {
+	encode gzip
+
+	# Optional extra gate in front of the app's own login (HTTP basic auth, bcrypt hash):
+	#   caddy hash-password
+	# basicauth {
+	#	family <paste-hash-here>
+	# }
+
+	reverse_proxy 127.0.0.1:8000 {
+		# Caddy sets X-Forwarded-For/-Proto itself and proxies WebSockets automatically.
+		flush_interval -1   # don't buffer the live MJPEG streams
+	}
+
+	# Rate-limit sign-in attempts at the edge too (needs the caddy-ratelimit plugin) — optional.
+}

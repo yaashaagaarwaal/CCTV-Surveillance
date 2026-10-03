@@ -1,0 +1,20 @@
+# systemd unit (Linux server). Example only. For macOS use a launchd plist or just run in tmux.
+[Unit]
+Description=Smart CCTV backend
+After=network-online.target
+
+[Service]
+User=cctv
+WorkingDirectory=/opt/cctv/backend
+EnvironmentFile=/opt/cctv/backend/.env
+# Bind to loopback only; the reverse proxy is the only thing exposed.
+ExecStart=/opt/cctv/backend/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --timeout-graceful-shutdown 10
+Restart=on-failure
+# Basic sandboxing
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/cctv/backend/data /opt/cctv/backend/app/storage /opt/cctv/backend/models
+
+[Install]
+WantedBy=multi-user.target
