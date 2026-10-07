@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -6,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import FileResponse
 from sqlalchemy import delete, func, select
 
-from app.db.models import Event, FaceObservation, Person, PersonDetection
+from app.db.models import Alert, Event, FaceObservation, Person, PersonDetection
 from app.db.session import SessionLocal
 from app.security.deps import current_user, require_admin
 from app.services.recording.paths import resolve_recording_path
@@ -54,7 +55,26 @@ def _faces_summary(session, event_ids: list[int]) -> dict[int, dict]:
     return summary
 
 
-def _serialize(event: Event, faces: dict | None = None) -> dict:
+RULE_ALERT_TYPES = ("restricted_area", "suspicious_activity")
+
+
+def _reasons_summary(session, event_ids: list[int]) -> dict[int, list[dict]]:
+    """Why each event was flagged: the rule-based alerts raised during it, with their explanations."""
+    reasons: dict[int, list[dict]] = {i: [] for i in event_ids}
+    if not event_ids:
+        return reasons
+    rows = session.scalars(
+        select(Alert).where(Alert.event_id.in_(event_ids), Alert.type.in_(RULE_ALERT_TYPES)).order_by(Alert.created_at, Alert.id)
+    ).all()
+    for alert in rows:
+        details = json.loads(alert.details) if alert.details else {}
+        reasons[alert.event_id].append(
+            {"alert_id": alert.id, "type": alert.type, "severity": alert.severity, "rule": details.get("rule"), "message": alert.message}
+        )
+    return reasons
+
+
+def _serialize(event: Event, faces: dict | None = None, reasons: list[dict] | None = None) -> dict:
     size_bytes = None
     if event.recording_path:
         path = resolve_recording_path(event.recording_path)
@@ -71,6 +91,7 @@ def _serialize(event: Event, faces: dict | None = None) -> dict:
         "playable": bool(event.recording_path) and event.status in PLAYABLE_STATUSES and size_bytes is not None,
         "size_bytes": size_bytes,
         "max_confidence": event.max_confidence,
+        "reasons": reasons or [],
         **(faces or {"people": [], "unknown_faces": 0, "uncertain_faces": 0}),
     }
 
@@ -110,15 +131,16 @@ def list_events(
         events = session.scalars(
             select(Event).where(*conditions).order_by(Event.timestamp.desc(), Event.id.desc()).limit(limit).offset(offset)
         ).all()
-        faces = _faces_summary(session, [e.id for e in events])
-        return {"items": [_serialize(e, faces[e.id]) for e in events], "total": total or 0}
+        ids = [e.id for e in events]
+        faces, reasons = _faces_summary(session, ids), _reasons_summary(session, ids)
+        return {"items": [_serialize(e, faces[e.id], reasons[e.id]) for e in events], "total": total or 0}
 
 
 @router.get("/{event_id}")
 def get_event(event_id: int):
     with SessionLocal() as session:
         event = _get_event_or_404(session, event_id)
-        return _serialize(event, _faces_summary(session, [event_id])[event_id])
+        return _serialize(event, _faces_summary(session, [event_id])[event_id], _reasons_summary(session, [event_id])[event_id])
 
 
 def _playable_path_or_404(event: Event):

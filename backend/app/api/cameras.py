@@ -4,12 +4,13 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from starlette.concurrency import run_in_threadpool
 
 from app.core.shutdown import shutdown_event
-from app.db.models import Camera
+from app.db.models import Camera, CameraRules, Zone
 from app.security.deps import current_user, require_admin
+from app.security.sessions import AuthUser
 from app.db.session import SessionLocal
 from app.services.camera.factory import CameraSpec, SourceError, build_camera, normalize_source
 from app.services.camera.manager import camera_manager, warmup_camera_permissions
@@ -63,11 +64,17 @@ def _get_camera_or_404(session, camera_id: str) -> Camera:
     return row
 
 
+def _for_user(camera: dict, user: AuthUser) -> dict:
+    """Only administrators get the raw source (RTSP/HTTP URLs can contain a
+    password); everyone else sees the masked `source_display` only."""
+    return camera if user.is_admin else {**camera, "source": camera["source_display"]}
+
+
 @router.get("")
-def list_cameras():
+def list_cameras(user: AuthUser = Depends(current_user)):
     with SessionLocal() as session:
         rows = session.scalars(select(Camera).order_by(Camera.created_at, Camera.id)).all()
-        return [serialize_camera(r) for r in rows]
+        return [_for_user(serialize_camera(r), user) for r in rows]
 
 
 @router.post("/test", dependencies=[Depends(require_admin)])
@@ -122,9 +129,9 @@ async def create_camera(body: CameraCreate):
 
 
 @router.get("/{camera_id}")
-def get_camera(camera_id: str):
+def get_camera(camera_id: str, user: AuthUser = Depends(current_user)):
     with SessionLocal() as session:
-        return serialize_camera(_get_camera_or_404(session, camera_id))
+        return _for_user(serialize_camera(_get_camera_or_404(session, camera_id)), user)
 
 
 @router.patch("/{camera_id}", dependencies=[Depends(require_admin)])
@@ -168,6 +175,8 @@ def delete_camera(camera_id: str):
     camera_manager.stop_camera(camera_id, resolve_alerts=True)
     with SessionLocal() as session:
         session.delete(session.get(Camera, camera_id))
+        session.execute(delete(Zone).where(Zone.camera_id == camera_id))  # its rules go with it
+        session.execute(delete(CameraRules).where(CameraRules.camera_id == camera_id))
         session.commit()
     return Response(status_code=204)
 
