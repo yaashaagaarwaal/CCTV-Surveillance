@@ -9,6 +9,9 @@ Two extra clips simulate night conditions (clearly synthetic: a normal clip
 darkened with sensor noise, and a monochrome "infrared-style" clip) so night
 mode can be tried without waiting for dark.
 
+It also writes demo_person.jpg, a portrait to register on the People page so the
+face-recognition demo works without a webcam.
+
 Run from the backend folder:
     python scripts/make_demo_videos.py
 """
@@ -75,6 +78,19 @@ def infrared_look(frame: np.ndarray, rng) -> np.ndarray:
     return cv2.cvtColor(out, cv2.COLOR_GRAY2BGR)
 
 
+def make_face_photo(name: str = "demo_person.jpg") -> None:
+    """A portrait of the larger face in Ultralytics' zidane.jpg, for registering
+    a person on the People page. The other man in the demo videos stays
+    unregistered, so he is reported as an unknown person. (Coordinates were
+    found with the same face detector the app uses.)"""
+    image = cv2.imread(str(ASSETS / "zidane.jpg"))
+    x, y, w, h = 917, 98, 136, 174
+    crop = image[max(y - 100, 0) : y + h + 150, max(x - 130, 0) : x + w + 130]
+    path = OUT_DIR / name
+    cv2.imwrite(str(path), crop, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    print(f"wrote {path} ({path.stat().st_size // 1024} KB)")
+
+
 if __name__ == "__main__":
     OUT_DIR.mkdir(exist_ok=True)
     try:
@@ -82,5 +98,6 @@ if __name__ == "__main__":
         make_video("demo_street.mp4", "bus.jpg", 720, (330, 470), (70, 90, 110))
         make_video("demo_night.mp4", "zidane.jpg", 1100, (0, 130), (95, 85, 75), post=low_light)
         make_video("demo_infrared.mp4", "bus.jpg", 720, (330, 470), (70, 90, 110), post=infrared_look)
+        make_face_photo()
     except Exception as exc:
         sys.exit(f"Could not generate demo videos: {exc}")
