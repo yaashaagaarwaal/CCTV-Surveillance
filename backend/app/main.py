@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from app.api import alerts, auth, cameras, dashboard, events, health, notifications, people, realtime, sources, zones
+from app.api import alerts, auth, cameras, dashboard, events, health, notifications, people, realtime, rules, sources, zones
 from app.core.config import settings
 from app.core.shutdown import install_shutdown_hooks
 from app.db.session import init_db
@@ -87,6 +87,7 @@ for protected in (
     people.router,
     alerts.router,
     zones.router,
+    rules.router,
     notifications.router,
 ):
     app.include_router(protected, prefix=prefix)  # each router requires a logged-in user
