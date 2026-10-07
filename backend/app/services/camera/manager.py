@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 
 from app.core.config import settings
+from app.services.activity.rules import RulesSpec, load_rules
 from app.services.activity.zones import ZoneSpec, load_zone_specs
 from app.services.alerts import raise_alert, resolve_by_key
 from app.services.camera.base import BaseCamera, CameraStatus
@@ -83,6 +84,9 @@ class CameraWorker:
 
     def set_zones(self, zones: list[ZoneSpec]) -> None:
         self._pipeline.set_zones(zones)
+
+    def set_rules(self, rules: RulesSpec) -> None:
+        self._pipeline.set_rules(rules)
 
     @property
     def is_recording(self) -> bool:
@@ -223,6 +227,10 @@ class CameraManager:
             pipeline.set_zones(load_zone_specs(spec.id))
         except Exception:
             logger.exception("Camera %s: could not load restricted zones", spec.id)
+        try:
+            pipeline.set_rules(load_rules(spec.id))
+        except Exception:
+            logger.exception("Camera %s: could not load security rules", spec.id)
         worker = CameraWorker(spec, camera, pipeline)
         with self._lock:
             self._workers[spec.id] = worker
@@ -248,6 +256,11 @@ class CameraManager:
         worker = self.get(camera_id)
         if worker is not None:
             worker.set_zones(load_zone_specs(camera_id))
+
+    def reload_rules(self, camera_id: str) -> None:
+        worker = self.get(camera_id)
+        if worker is not None:
+            worker.set_rules(load_rules(camera_id))
 
     def stop_all(self) -> None:
         with self._lock:

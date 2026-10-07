@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.db.models import Event, PersonDetection
 from app.db.session import SessionLocal
 from app.services.activity.monitor import ActivityMonitor
+from app.services.activity.rules import RulesSpec
 from app.services.activity.zones import ZoneSpec, draw_zones
 from app.services.detection.detector import Detection, PersonDetector
 from app.services.faces.service import FaceResult, FaceService
@@ -136,6 +137,9 @@ class MotionEventPipeline:
         self._zones = zones
         self._activity.set_zones(zones)
 
+    def set_rules(self, rules: RulesSpec) -> None:
+        self._activity.set_rules(rules)
+
     def get_lighting(self) -> dict:
         state = self._lighting.state.as_dict()
         cfg = settings.night
@@ -213,7 +217,7 @@ class MotionEventPipeline:
             self._run_activity_rules(detections, frame)
         else:
             self._person_present = False
-            self._occupied_zones = set()
+            self._run_activity_rules([], frame)  # empty cycles matter: they end zone visits
 
     def _run_activity_rules(self, detections: list[Detection], frame: np.ndarray) -> None:
         try:
