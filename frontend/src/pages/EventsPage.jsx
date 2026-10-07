@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { Activity, Download, Play, Trash2 } from 'lucide-react'
 import { api, downloadUrl } from '../api'
-import { EventStatusBadge, EventTypeBadge, PeopleSummary } from '../components/EventBadges'
+import { EventReasons, EventStatusBadge, EventTypeBadge, PeopleSummary } from '../components/EventBadges'
 import Pagination from '../components/Pagination'
 import VideoModal from '../components/VideoModal'
 import { Card, ConfirmDialog, EmptyState, ErrorBanner, Spinner, inputClass } from '../components/ui'
@@ -154,6 +154,7 @@ export default function EventsPage() {
                 {formatDateTime(event.timestamp)} · {timeAgo(event.timestamp)}
               </p>
               <PeopleSummary event={event} />
+              <EventReasons event={event} limit={2} />
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 text-xs text-slate-400">
                   <EventTypeBadge type={event.event_type} />
@@ -183,7 +184,8 @@ export default function EventsPage() {
               </thead>
               <tbody className="divide-y divide-slate-800">
                 {items.map((event) => (
-                  <tr key={event.id} className="hover:bg-slate-800/30">
+                  <Fragment key={event.id}>
+                  <tr className={`hover:bg-slate-800/30 ${event.reasons?.length ? 'border-b-0' : ''}`}>
                     <td className="px-4 py-3 font-medium">{nameOf(event.camera_id)}</td>
                     <td className="px-4 py-3 text-slate-400">
                       <span className="block text-slate-300">{formatDateTime(event.timestamp)}</span>
@@ -204,6 +206,14 @@ export default function EventsPage() {
                       <EventActions event={event} onPlay={setPlaying} onDelete={askDelete} canDelete={isAdmin} />
                     </td>
                   </tr>
+                  {event.reasons?.length > 0 && (
+                    <tr className="bg-slate-900/40">
+                      <td colSpan={8} className="px-4 pb-3 pt-0">
+                        <EventReasons event={event} limit={3} />
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>

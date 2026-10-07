@@ -10,22 +10,28 @@ import { useAuth } from '../hooks/useAuth'
 import { useCameras } from '../hooks/useCameras'
 import { usePolling } from '../hooks/usePolling'
 import { formatDateTime, timeAgo } from '../utils/format'
-import { ALERT_TYPES, SEVERITIES } from '../utils/meta'
+import { ALERT_TYPES, RULES, SEVERITIES } from '../utils/meta'
 
 const PAGE_SIZE = 12
 
-function describe(alert) {
+// "Why": which rule fired, the zone it applied to, and how sure the person detector was.
+function Why({ alert }) {
   const d = alert.details ?? {}
-  if (d.zone) return `Zone: ${d.zone}`
-  if (d.rule === 'loitering') return `In view for ${d.dwell_seconds} s`
-  if (d.rule === 'after_hours') return `Quiet hours ${d.window}`
-  return null
+  const rule = RULES[d.rule]
+  if (!rule && !d.zone) return null
+  return (
+    <p className="text-xs text-slate-400" title={rule?.help}>
+      {rule && <span className="font-medium text-slate-300">{rule.label}</span>}
+      {d.zone && <span>{rule ? ' · ' : ''}Zone: {d.zone}</span>}
+      {d.confidence != null && <span> · person detection {Math.round(d.confidence * 100)}%</span>}
+      {d.rule === 'fall_like' && <span className="text-amber-300"> · estimate from outline only, can be wrong</span>}
+    </p>
+  )
 }
 
 function AlertCard({ alert, cameraName, canDelete, onRead, onResolve, onDelete, onSnapshot, onPlay }) {
   const meta = ALERT_TYPES[alert.type]
   const severity = SEVERITIES[alert.severity]
-  const extra = describe(alert)
   return (
     <Card className={`flex gap-4 p-3 sm:p-4 ${alert.resolved ? 'opacity-60' : !alert.read ? 'border-red-500/40' : ''}`}>
       <button
@@ -58,10 +64,8 @@ function AlertCard({ alert, cameraName, canDelete, onRead, onResolve, onDelete, 
             {alert.occurrences > 1 && <Badge>×{alert.occurrences}</Badge>}
           </div>
           <p className="text-sm text-slate-300">{alert.message}</p>
-          <p className="truncate text-xs text-slate-400">
-            {cameraName}
-            {extra && ` · ${extra}`}
-          </p>
+          <Why alert={alert} />
+          <p className="truncate text-xs text-slate-400">{cameraName}</p>
           <p className="text-xs text-slate-500">
             {formatDateTime(alert.created_at)} · {timeAgo(alert.created_at)}
           </p>

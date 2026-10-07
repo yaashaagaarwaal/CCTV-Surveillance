@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Download, VideoOff } from 'lucide-react'
 import { downloadUrl, videoUrl } from '../api'
 import { formatBytes, formatDateTime, formatDuration, percent } from '../utils/format'
-import { EventTypeBadge, PeopleSummary } from './EventBadges'
+import { EventReasons, EventTypeBadge, PeopleSummary } from './EventBadges'
 import { Button, Modal } from './ui'
 
 function Player({ event }) {
@@ -36,6 +36,12 @@ export default function VideoModal({ event, cameraName, onClose }) {
       <div className="space-y-4">
         {/* keyed so a new event resets the player's error state */}
         <Player key={event.id} event={event} />
+        {event.reasons?.length > 0 && (
+          <div className="rounded-lg border border-slate-800 p-3">
+            <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-slate-500">Why this was flagged</p>
+            <EventReasons event={event} />
+          </div>
+        )}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2 text-sm text-slate-400">
             <EventTypeBadge type={event.event_type} />

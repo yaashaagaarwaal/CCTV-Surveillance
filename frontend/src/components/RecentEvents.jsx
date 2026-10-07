@@ -56,6 +56,7 @@ export default function RecentEvents({ events, nameOf, onSelect }) {
                     {eventTitle(event)}
                     <span className="font-normal text-slate-400"> · {nameOf(event.camera_id)}</span>
                   </span>
+                  {event.reasons?.length > 0 && <span className="block truncate text-xs text-amber-300/90">{event.reasons[event.reasons.length - 1].message}</span>}
                   <span className="block text-xs text-slate-500" title={formatDateTime(event.timestamp)}>
                     {formatDateTime(event.timestamp)} · {timeAgo(event.timestamp)}
                     {event.max_confidence != null && ` · ${percent(event.max_confidence)}`}

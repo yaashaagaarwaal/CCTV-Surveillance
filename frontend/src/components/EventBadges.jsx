@@ -1,5 +1,5 @@
 import { Activity, Eye, OctagonAlert, ShieldAlert, User } from 'lucide-react'
-import { EVENT_TYPES } from '../utils/meta'
+import { EVENT_TYPES, SEVERITIES, ruleLabel } from '../utils/meta'
 import { Badge } from './ui'
 
 const TYPE_ICONS = { motion: Activity, person: User, suspicious_activity: Eye, unknown_person: ShieldAlert, restricted_area: OctagonAlert }
@@ -46,5 +46,24 @@ export function PeopleSummary({ event }) {
       {unknown > 0 && <Badge tone="red">Unknown</Badge>}
       {unsure > 0 && <Badge tone="orange">Not sure</Badge>}
     </span>
+  )
+}
+
+// Why an event was flagged: the rule-based alerts raised during it, in plain words.
+export function EventReasons({ event, limit }) {
+  const reasons = event.reasons ?? []
+  if (!reasons.length) return null
+  const shown = limit ? reasons.slice(0, limit) : reasons
+  return (
+    <ul className="space-y-1">
+      {shown.map((reason) => (
+        <li key={reason.alert_id} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-300">
+          <Badge tone={SEVERITIES[reason.severity]?.tone}>{(SEVERITIES[reason.severity]?.label ?? reason.severity).toUpperCase()}</Badge>
+          {ruleLabel(reason.rule) && <span className="text-slate-500">{ruleLabel(reason.rule)}:</span>}
+          <span>{reason.message}</span>
+        </li>
+      ))}
+      {limit && reasons.length > limit && <li className="text-xs text-slate-500">+{reasons.length - limit} more</li>}
+    </ul>
   )
 }
