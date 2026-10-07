@@ -173,7 +173,25 @@ class Zone(Base):
     schedule_start: Mapped[str | None] = mapped_column(String, nullable=True)
     schedule_end: Mapped[str | None] = mapped_column(String, nullable=True)
     severity: Mapped[str] = mapped_column(String, default="high")
+    # 0 switches a rule off. Loitering: seconds continuously inside. Repeated
+    # entry: this many separate entries within `repeat_window_seconds`.
+    loiter_seconds: Mapped[int] = mapped_column(Integer, default=30)
+    repeat_entries: Mapped[int] = mapped_column(Integer, default=3)
+    repeat_window_seconds: Mapped[int] = mapped_column(Integer, default=300)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class CameraRules(Base):
+    """Per-camera security rules that aren't tied to a zone."""
+
+    __tablename__ = "camera_rules"
+
+    camera_id: Mapped[str] = mapped_column(String, primary_key=True)
+    # Security hours: a person seen between these local HH:MM times raises an
+    # alert (may cross midnight). Both null = no security hours.
+    quiet_start: Mapped[str | None] = mapped_column(String, nullable=True)
+    quiet_end: Mapped[str | None] = mapped_column(String, nullable=True)
+    fall_detection: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class User(Base):

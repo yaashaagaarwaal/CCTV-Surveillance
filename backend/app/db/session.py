@@ -28,6 +28,11 @@ _ADDED_COLUMNS = {
         "resolved_at": "DATETIME",
         "resolved_by": "VARCHAR",
     },
+    "zones": {
+        "loiter_seconds": "INTEGER DEFAULT 30",
+        "repeat_entries": "INTEGER DEFAULT 3",
+        "repeat_window_seconds": "INTEGER DEFAULT 300",
+    },
 }
 
 
