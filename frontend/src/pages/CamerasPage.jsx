@@ -1,6 +1,5 @@
 import { useState } from 'react'
-import { Moon, Pencil, Plus, Trash2, Video, VideoOff } from 'lucide-react'
-import { OctagonAlert } from 'lucide-react'
+import { Moon, OctagonAlert, Pencil, Plus, Trash2, Video, VideoOff } from 'lucide-react'
 import { api, snapshotUrl } from '../api'
 import CameraFormModal from '../components/CameraFormModal'
 import ZonesModal from '../components/ZonesModal'
@@ -69,7 +68,7 @@ function CameraRow({ camera, tick, busy, canEdit, onToggle, onEdit, onDelete, on
             {camera.enabled ? 'Enabled' : 'Disabled'}
           </label>
           <div className="flex gap-1">
-            <button onClick={() => onZones(camera)} aria-label={`Restricted zones for ${camera.name}`} title="Restricted zones" className="rounded p-2 text-slate-400 hover:bg-slate-800 hover:text-slate-100">
+            <button onClick={() => onZones(camera)} aria-label={`Zones and security rules for ${camera.name}`} title="Zones & security rules" className="rounded p-2 text-slate-400 hover:bg-slate-800 hover:text-slate-100">
               <OctagonAlert className="h-4 w-4" />
             </button>
             {canEdit && (
