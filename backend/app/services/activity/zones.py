@@ -34,6 +34,9 @@ class ZoneSpec:
     severity: str
     schedule_start: str | None
     schedule_end: str | None
+    loiter_seconds: int = 0
+    repeat_entries: int = 0
+    repeat_window_seconds: int = 300
 
     def is_active(self, when: datetime | None = None) -> bool:
         if not (self.schedule_start and self.schedule_end):
@@ -54,6 +57,9 @@ def spec_from_row(row: Zone) -> ZoneSpec:
         severity=row.severity,
         schedule_start=row.schedule_start,
         schedule_end=row.schedule_end,
+        loiter_seconds=row.loiter_seconds or 0,
+        repeat_entries=row.repeat_entries or 0,
+        repeat_window_seconds=row.repeat_window_seconds or 300,
     )
 
 

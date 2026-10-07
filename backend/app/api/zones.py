@@ -21,6 +21,30 @@ class ZoneBody(BaseModel):
     schedule_start: str | None = None
     schedule_end: str | None = None
     severity: str = "high"
+    loiter_seconds: int = Field(default=30, description="0 = off")
+    repeat_entries: int = Field(default=3, description="0 = off")
+    repeat_window_seconds: int = 300
+
+    @field_validator("loiter_seconds")
+    @classmethod
+    def _loiter(cls, value):
+        if value != 0 and not 5 <= value <= 3600:
+            raise ValueError("loitering limit must be 0 (off) or between 5 and 3600 seconds")
+        return value
+
+    @field_validator("repeat_entries")
+    @classmethod
+    def _repeat(cls, value):
+        if value != 0 and not 2 <= value <= 20:
+            raise ValueError("repeated-entry count must be 0 (off) or between 2 and 20")
+        return value
+
+    @field_validator("repeat_window_seconds")
+    @classmethod
+    def _window(cls, value):
+        if not 30 <= value <= 86400:
+            raise ValueError("repeated-entry period must be between 30 seconds and 24 hours")
+        return value
 
     @field_validator("points")
     @classmethod
@@ -59,6 +83,9 @@ def _serialize(zone: Zone) -> dict:
         "schedule_start": zone.schedule_start,
         "schedule_end": zone.schedule_end,
         "severity": zone.severity,
+        "loiter_seconds": zone.loiter_seconds,
+        "repeat_entries": zone.repeat_entries,
+        "repeat_window_seconds": zone.repeat_window_seconds,
         "created_at": iso_utc(zone.created_at),
     }
 
@@ -83,7 +110,8 @@ def create_zone(camera_id: str, body: ZoneBody):
         if db.get(Camera, camera_id) is None:
             raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found")
         zone = Zone(camera_id=camera_id, name=body.name.strip(), points=json.dumps(body.points), enabled=body.enabled,
-                    schedule_start=body.schedule_start, schedule_end=body.schedule_end, severity=body.severity)
+                    schedule_start=body.schedule_start, schedule_end=body.schedule_end, severity=body.severity,
+                    loiter_seconds=body.loiter_seconds, repeat_entries=body.repeat_entries, repeat_window_seconds=body.repeat_window_seconds)
         db.add(zone)
         db.commit()
         result = _serialize(zone)
@@ -100,6 +128,7 @@ def update_zone(zone_id: int, body: ZoneBody):
             raise HTTPException(status_code=404, detail="Zone not found")
         zone.name, zone.points, zone.enabled = body.name.strip(), json.dumps(body.points), body.enabled
         zone.schedule_start, zone.schedule_end, zone.severity = body.schedule_start, body.schedule_end, body.severity
+        zone.loiter_seconds, zone.repeat_entries, zone.repeat_window_seconds = body.loiter_seconds, body.repeat_entries, body.repeat_window_seconds
         db.commit()
         camera_id, result = zone.camera_id, _serialize(zone)
     camera_manager.reload_zones(camera_id)
