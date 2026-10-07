@@ -154,19 +154,37 @@ class NightConfig(BaseModel):
 
 class ActivityConfig(BaseModel):
     """Simple, explainable rules for "suspicious activity". They are
-    heuristics, not behavior understanding: what is suspicious depends on context."""
+    heuristics, not behavior understanding: what is suspicious depends on context.
+    Per-zone limits (loitering, repeated entry) and per-camera security hours
+    are stored in the database and edited from the dashboard; the values here
+    are server-wide defaults and tuning knobs."""
 
-    # A person continuously in view for this long is "loitering".
-    loitering_enabled: bool = True
-    loiter_seconds: float = 60.0
-    # Any person seen during these local-time hours is "after hours" presence.
+    # Optional camera-wide rule: one person continuously in view this long (any
+    # part of the picture). Off by default; zone loitering is the precise version.
+    lingering_enabled: bool = False
+    lingering_seconds: float = 60.0
+    # Default security hours for cameras that have none set in the dashboard.
     after_hours_enabled: bool = False
     after_hours_start: str = "23:00"
     after_hours_end: str = "05:00"
     suspicious_alert_cooldown_seconds: float = 300.0
-    # Restricted zones: how many detection cycles in a row a person must be inside, and alert spacing.
+    # Restricted zones: detection cycles in a row a person must be inside, alert spacing,
+    # and how long a zone must be empty before the person counts as having left it.
     zone_confirmations: int = 2
     zone_alert_cooldown_seconds: float = 120.0
+    zone_exit_seconds: float = 4.0
+
+    # Fall-like posture change (off per camera until enabled in the dashboard).
+    # Uses only the person's bounding box: upright (tall) -> lying (wide) quickly,
+    # and staying down. Ratios are height / width.
+    fall_upright_ratio: float = 1.4
+    fall_lying_ratio: float = 0.8
+    fall_recovered_ratio: float = 1.2
+    fall_window_seconds: float = 3.0  # the change must happen within this time
+    fall_min_height_drop: float = 0.35  # box must get this much shorter
+    fall_confirm_seconds: float = 4.0  # ...and stay down this long
+    fall_min_person_height: float = 0.15  # ignore people smaller than this fraction of the frame
+    fall_cooldown_seconds: float = 120.0
 
 
 class AlertConfig(BaseModel):
