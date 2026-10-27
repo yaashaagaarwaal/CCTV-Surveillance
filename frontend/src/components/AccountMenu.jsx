@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { KeyRound, LogOut, UserCircle } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { Home, KeyRound, LogOut, UserCircle } from 'lucide-react'
 import { api } from '../api'
 import { useAuth } from '../hooks/useAuth'
+import { useSignOut } from '../hooks/useSignOut'
 import { Badge, Button, ErrorBanner, Modal, Spinner, inputClass } from './ui'
 
 function ChangePasswordModal({ onClose }) {
@@ -59,8 +61,24 @@ function ChangePasswordModal({ onClose }) {
   )
 }
 
+export function SignOutButton() {
+  const signOut = useSignOut()
+  return (
+    <button
+      onClick={signOut}
+      aria-label="Sign out"
+      title="Sign out"
+      className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm text-slate-400 transition-colors hover:bg-red-500/10 hover:text-red-300"
+    >
+      <LogOut className="h-4 w-4" />
+      <span className="hidden md:inline">Sign out</span>
+    </button>
+  )
+}
+
 export default function AccountMenu() {
-  const { user, logout } = useAuth()
+  const { user } = useAuth()
+  const signOut = useSignOut()
   const [open, setOpen] = useState(false)
   const [changing, setChanging] = useState(false)
   const ref = useRef(null)
@@ -81,7 +99,10 @@ export default function AccountMenu() {
         className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-slate-300 hover:bg-slate-800"
       >
         <UserCircle className="h-5 w-5" />
-        <span className="hidden sm:inline">{user.username}</span>
+        <span className="hidden text-left leading-tight sm:block">
+          <span className="block text-sm font-medium text-slate-100">{user.username}</span>
+          <span className="block text-[11px] capitalize text-slate-500">{user.role}</span>
+        </span>
       </button>
       {open && (
         <div className="absolute right-0 top-full z-40 mt-2 w-56 overflow-hidden rounded-xl border border-slate-800 bg-slate-900 shadow-2xl">
@@ -98,7 +119,10 @@ export default function AccountMenu() {
           >
             <KeyRound className="h-4 w-4" /> Change password
           </button>
-          <button onClick={logout} className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-slate-300 hover:bg-slate-800">
+          <Link to="/" onClick={() => setOpen(false)} className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-slate-300 hover:bg-slate-800">
+            <Home className="h-4 w-4" /> Homepage
+          </Link>
+          <button onClick={signOut} className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-slate-300 hover:bg-slate-800">
             <LogOut className="h-4 w-4" /> Sign out
           </button>
         </div>
