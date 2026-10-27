@@ -1,2 +1,94 @@
 /* Global styles — Tailwind CSS v4 entry point */
 @import "tailwindcss";
+
+@theme {
+  /* System fonts only: no third-party font requests (the app is meant to run locally). */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "SF Pro Display", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --color-ink: #05070b;
+  --color-panel: #0a0e15;
+
+  --animate-float: float 7s ease-in-out infinite;
+  --animate-scan: scan 5s linear infinite;
+  --animate-glow: glow 4s ease-in-out infinite;
+  --animate-drift: drift 22s linear infinite;
+  --animate-blink: blink 1.4s steps(2, start) infinite;
+  --animate-walk: walk 9s ease-in-out infinite;
+  --animate-walk-slow: walk 13s ease-in-out -4s infinite;
+
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-8px); }
+  }
+  @keyframes scan {
+    0% { transform: translateY(-100%); }
+    100% { transform: translateY(100%); }
+  }
+  @keyframes glow {
+    0%, 100% { opacity: 0.55; }
+    50% { opacity: 1; }
+  }
+  @keyframes drift {
+    0% { background-position: 0 0; }
+    100% { background-position: 64px 64px; }
+  }
+  @keyframes walk {
+    0%, 100% { transform: translateX(-16px); }
+    50% { transform: translateX(16px); }
+  }
+  @keyframes blink {
+    to { visibility: hidden; }
+  }
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 5rem; /* anchor targets stay clear of the fixed navbar */
+  background: var(--color-ink);
+}
+
+body {
+  background: var(--color-ink);
+  color: #e2e8f0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Faint security-grid texture used behind hero / login visuals. */
+.bg-grid {
+  background-image:
+    linear-gradient(to right, rgb(148 163 184 / 0.07) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(148 163 184 / 0.07) 1px, transparent 1px);
+  background-size: 64px 64px;
+}
+
+/* Frosted-glass surface. */
+.glass {
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.06), rgb(255 255 255 / 0.02));
+  border: 1px solid rgb(255 255 255 / 0.09);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.text-gradient {
+  background-image: linear-gradient(120deg, #e0f2fe 0%, #7dd3fc 38%, #3b82f6 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Scroll-reveal (see components/landing/Reveal.jsx). */
+.reveal {
+  opacity: 0;
+  transform: translateY(18px);
+  transition: opacity 0.7s ease, transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: var(--reveal-delay, 0ms);
+}
+.reveal.is-visible {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .reveal { opacity: 1; transform: none; transition: none; }
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
+}
