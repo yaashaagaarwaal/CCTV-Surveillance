@@ -171,7 +171,7 @@ Component-based UI that re-renders when data changes — ideal for a live dashbo
 Camera status is polled every few seconds (`usePolling`); alerts arrive instantly over a **WebSocket** with a polling fallback; video is an `<img>` pointing at the MJPEG stream.
 
 **Q. How does login work in the UI?**
-An `AuthProvider` asks `/auth/me` on load; no session → only the login form is rendered (no camera image is even requested). A 401 anywhere logs the user out. Admin-only buttons are hidden for viewers (the server enforces it anyway).
+An `AuthProvider` asks `/auth/me` on every page load. React Router guards (`RequireAuth`) send a signed-out visitor to `/login` — no camera image is even requested — and bring them back to the page they wanted after login; signed-in users who open `/login` go to the dashboard. A 401 anywhere logs the user out, and Sign out invalidates the session on the server. Admin-only buttons are hidden for viewers (the server enforces it anyway).
 
 ---
 

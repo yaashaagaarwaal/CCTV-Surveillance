@@ -42,6 +42,7 @@ intrusions and other explainable security events, keeps working at **night**, an
 | 🔔 **Alert system** | Types: unknown person, restricted area, suspicious activity, camera offline. Severity (low → critical), timestamps, unread → read → resolved lifecycle, real-time delivery over WebSocket, toasts, browser notifications, optional email (off by default, pluggable) |
 | 🕵️ **Suspicious-activity rules** | Restricted-zone intrusion, loitering in a zone, repeated entry, unusual (security) hours, and an experimental fall-like rule. Plain rules, each alert states *which* rule fired and *with what numbers* |
 | 🌙 **Night surveillance** | Detects low light and infrared video automatically, shows **NIGHT MODE**, keeps person detection working (dual raw/enhanced pass). Recordings are never altered |
+| 🌐 **Web app** | Public landing page and login page, then a protected, responsive dashboard (desktop, tablet, phone) with route guards and real-time data |
 | 🔐 **Authentication** | Login with hashed passwords, server-side sessions, admin / viewer roles, login throttling; every API route, stream, snapshot and recording is protected |
 | 🌐 **Secure remote architecture** | Safe-by-default local server; documented VPN / reverse-proxy deployment; a `REMOTE_MODE` that refuses to start with an unsafe configuration |
 | 🛠️ **Reliability** | Auto-reconnect, clean Ctrl+C shutdown, crash recovery of half-written recordings, contained failures (a face-model crash never stops recording) |
@@ -149,9 +150,10 @@ CCTV-Surveillance/
 └── frontend/
     ├── package.json · vite.config.js
     └── src/
-        ├── pages/                Dashboard, Cameras, Events, Recordings, Alerts, People, Users, Login
-        ├── components/           CameraTile, ZonesModal, AlertsPanel, VideoModal, ui/, layout/ ...
-        ├── hooks/                auth, alerts (WebSocket), polling, cameras
+        ├── App.jsx               routes + guards (/ · /login · /dashboard · …)
+        ├── pages/                Landing, Login, Dashboard, Cameras, Events, Recordings, Alerts, People, Users
+        ├── components/           landing/ (navbar, hero, features, …), CameraTile, ZonesModal, AlertsPanel, ui/, layout/ ...
+        ├── hooks/                auth, sign-out, alerts (WebSocket), polling, cameras
         ├── utils/                formatting, alert/event/rule display metadata
         └── api.js                the one place that talks to the backend
 ```
@@ -201,7 +203,18 @@ npm install
 npm run dev
 ```
 
-Open **http://localhost:5173** and sign in as `admin`.
+Open **http://localhost:5173** (the homepage), click **Login** or **Get Started**, and sign in as `admin`.
+
+| Page | URL (dev server) | Access |
+|---|---|---|
+| Homepage (landing page) | http://localhost:5173/ | public |
+| Login | http://localhost:5173/login | public (signed-in users are sent to the dashboard) |
+| Dashboard | http://localhost:5173/dashboard | login required |
+| Cameras · Alerts · Events · Recordings · People | `/cameras` · `/alerts` · `/events` · `/recordings` · `/people` | login required |
+| Users | `/users` | administrators only |
+
+Opening a protected page while signed out redirects to `/login` and brings you back to that page after signing in.
+Every route also works after a browser refresh.
 
 ### One-command alternative (serves the dashboard from the backend)
 
@@ -210,7 +223,7 @@ cd frontend && npm install && npm run build && cd ../backend
 SECURITY__SERVE_FRONTEND=true uvicorn app.main:app --port 8000
 ```
 
-Open **http://127.0.0.1:8000** — one program, one port, no Vite server.
+Open **http://127.0.0.1:8000** (homepage; `/login` and `/dashboard` work the same way) — one program, one port, no Vite server.
 
 ### Verify the installation
 
@@ -225,7 +238,9 @@ python -m tests.test_system           # ~2 minutes; starts a real server on a te
 
 | Page | What you do there |
 |---|---|
-| **Dashboard** | Live camera grid (click ⤢ to enlarge), counters (online cameras, people now, events today, recordings, unread alerts, night cameras), active alerts, recent events. A **NIGHT MODE** badge appears on cameras in the dark. |
+| **Homepage** (`/`) | Public product page: what the system does, how the pipeline works, **Login** / **Get Started** buttons. Shows no camera data and makes no API calls except the session check. |
+| **Login** (`/login`) | Username + password (show/hide), clear error messages. Wrong passwords are throttled by the server. **Sign out** (top right of the dashboard) ends the session on the server and returns to the homepage. Sessions last until you sign out or close the browser — there is deliberately no "remember me". |
+| **Dashboard** (`/dashboard`) | Live camera grid (click ⤢ to enlarge), counters (online cameras, people now, events today, recordings today, unread alerts), a warning when a camera is offline, active alerts, recent events. A **NIGHT MODE** badge appears on cameras in the dark; the header shows backend and live-alert connection status, your name and role, and **Sign out**. All numbers come from the live API. |
 | **Cameras** | **Add camera**: choose the type — *Local webcam* (`0`), *RTSP/IP* (`rtsp://user:pass@192.168.1.50:554/stream1`), *HTTP/MJPEG*, or *Video file (loops)* from `backend/sample_videos/`. Use **Test connection** before saving. Edit, disable and delete cameras. The octagon **(!)** button opens **Zones & security rules**. |
 | **Events** | Every detection, newest first. Filter by camera / type / status; play, download or delete the recording. Flagged events list *why* ("Person remained in restricted zone 'Driveway' for 32 seconds"). |
 | **Recordings** | Thumbnail grid of saved clips with playback and download. |
