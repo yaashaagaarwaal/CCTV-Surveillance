@@ -22,7 +22,7 @@ export function Button({ variant = 'secondary', className = '', ...props }) {
 }
 
 export function Card({ className = '', ...props }) {
-  return <div {...props} className={`rounded-xl border border-slate-800 bg-slate-900/60 ${className}`} />
+  return <div {...props} className={`rounded-xl border border-white/[0.08] bg-gradient-to-b from-white/[0.05] to-white/[0.02] shadow-lg shadow-black/20 backdrop-blur-sm ${className}`} />
 }
 
 const BADGE_TONES = {

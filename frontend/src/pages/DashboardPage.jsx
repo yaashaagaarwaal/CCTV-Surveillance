@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Activity, Film, Grid2x2, Grid3x3, RectangleHorizontal, Square, Users, Video } from 'lucide-react'
+import { Activity, Bell, Film, Grid2x2, Grid3x3, RectangleHorizontal, Square, TriangleAlert, Users, Video } from 'lucide-react'
 import { api } from '../api'
 import AlertsPanel from '../components/AlertsPanel'
 import CameraTile from '../components/CameraTile'
@@ -8,7 +8,8 @@ import RecentEvents from '../components/RecentEvents'
 import RecordingCard from '../components/RecordingCard'
 import StatCard from '../components/StatCard'
 import VideoModal from '../components/VideoModal'
-import { EmptyState, ErrorBanner, Spinner } from '../components/ui'
+import { EmptyState, ErrorBanner } from '../components/ui'
+import { useAuth } from '../hooks/useAuth'
 import { useCameras } from '../hooks/useCameras'
 import { usePolling } from '../hooks/usePolling'
 
@@ -34,6 +35,7 @@ function loadCols() {
 }
 
 export default function DashboardPage() {
+  const { user } = useAuth()
   const { cameras, loading, error: cameraError, nameOf } = useCameras()
   const summary = usePolling(api.summary, 3000)
   const recent = usePolling(() => api.events({ limit: 8 }), 4000)
@@ -54,21 +56,37 @@ export default function DashboardPage() {
   const enabled = cameras.filter((c) => c.enabled)
   const liveIds = new Set(enabled.filter((c) => c.status === 'online').slice(0, MAX_LIVE_STREAMS).map((c) => c.id))
   const s = summary.data
+  const offline = enabled.filter((c) => c.status === 'offline')
+  const statsLoading = !s && !summary.error
   const gridClasses = LAYOUTS.find((l) => l.cols === cols).classes
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-xl font-semibold">Dashboard</h1>
-        <p className="text-sm text-slate-500">Live overview of every camera</p>
+        <p className="text-sm text-slate-500">Welcome back, {user.username}. Live overview of every camera.</p>
       </div>
 
       <ErrorBanner>{summary.error || cameraError}</ErrorBanner>
 
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+      {offline.length > 0 && (
+        <div role="status" className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+          <p>
+            <span className="font-semibold">{offline.length === 1 ? 'Camera offline' : `${offline.length} cameras offline`}:</span> {offline.map((c) => c.name).join(', ')}. Reconnecting automatically —{' '}
+            <Link to="/cameras" className="underline underline-offset-2 hover:text-amber-100">
+              check the connection
+            </Link>
+            .
+          </p>
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 2xl:grid-cols-5">
         <StatCard
           icon={Video}
           label="Cameras online"
+          loading={statsLoading}
           value={s ? `${s.cameras.online}/${s.cameras.enabled}` : '—'}
           hint={s ? [s.cameras.offline ? `${s.cameras.offline} offline` : 'All connected', s.night_cameras ? `${s.night_cameras} in night mode` : null].filter(Boolean).join(' · ') : undefined}
           tone={s && s.cameras.offline ? 'amber' : 'green'}
@@ -76,6 +94,7 @@ export default function DashboardPage() {
         <StatCard
           icon={Users}
           label="People detected now"
+          loading={statsLoading}
           value={s?.people_now ?? '—'}
           hint={s ? (s.people_now ? 'Live detection' : 'No one in view') : undefined}
           tone={s?.people_now ? 'red' : 'default'}
@@ -83,6 +102,7 @@ export default function DashboardPage() {
         <StatCard
           icon={Activity}
           label="Events today"
+          loading={statsLoading}
           value={s?.events_today ?? '—'}
           hint={s ? `${s.person_events_today} with a person` : undefined}
           tone="blue"
@@ -90,9 +110,19 @@ export default function DashboardPage() {
         <StatCard
           icon={Film}
           label="Recordings today"
+          loading={statsLoading}
           value={s?.recordings_today ?? '—'}
           hint={s ? (s.active_recordings ? `${s.active_recordings} recording now` : 'Not recording') : undefined}
           tone={s?.active_recordings ? 'red' : 'default'}
+        />
+        <StatCard
+          icon={Bell}
+          label="Unread alerts"
+          loading={statsLoading}
+          value={s?.unread_alerts ?? '—'}
+          hint={s ? (s.open_alerts ? `${s.open_alerts} open in total` : 'Nothing needs attention') : undefined}
+          tone={s?.unread_alerts ? 'red' : 'default'}
+          className="col-span-2 sm:col-span-1"
         />
       </div>
 
@@ -116,8 +146,10 @@ export default function DashboardPage() {
           </div>
 
           {loading ? (
-            <div className="flex justify-center py-16">
-              <Spinner className="h-8 w-8" />
+            <div className={`grid gap-4 ${gridClasses}`} aria-busy="true">
+              {[0, 1].map((i) => (
+                <div key={i} className="aspect-video animate-pulse rounded-xl border border-white/[0.06] bg-white/[0.04]" />
+              ))}
             </div>
           ) : enabled.length === 0 ? (
             <EmptyState icon={Video} title={cameras.length ? 'All cameras are disabled' : 'No cameras configured'}>

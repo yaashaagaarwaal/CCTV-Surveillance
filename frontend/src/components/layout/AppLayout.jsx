@@ -1,19 +1,20 @@
 import { useState } from 'react'
 import { Link, NavLink, Outlet } from 'react-router-dom'
-import { Activity, Bell, Film, LayoutDashboard, Menu, ScanFace, ShieldCheck, Users, Video, X } from 'lucide-react'
+import { Activity, Bell, Film, LayoutDashboard, Menu, ScanFace, Users, Video, X } from 'lucide-react'
 import { api } from '../../api'
 import { usePolling } from '../../hooks/usePolling'
 import { AlertsProvider } from '../../hooks/AlertsProvider'
 import { useAlerts } from '../../hooks/useAlerts'
 import { useNow } from '../../hooks/useNow'
 import { useAuth } from '../../hooks/useAuth'
-import AccountMenu from '../AccountMenu'
+import AccountMenu, { SignOutButton } from '../AccountMenu'
 import AlertToasts from '../AlertToasts'
 import { formatClock } from '../../utils/format'
+import Logo from '../Logo'
 import { StatusDot } from '../ui'
 
 const NAV = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
+  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/cameras', label: 'Cameras', icon: Video },
   { to: '/alerts', label: 'Alerts', icon: Bell, badge: true },
   { to: '/events', label: 'Events', icon: Activity },
@@ -27,14 +28,8 @@ function SidebarContent({ onNavigate }) {
   const { isAdmin } = useAuth()
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-3 px-5 py-5">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-sky-600/20 text-sky-400">
-          <ShieldCheck className="h-5 w-5" />
-        </div>
-        <div className="leading-tight">
-          <p className="font-semibold tracking-tight">Smart CCTV</p>
-          <p className="text-xs text-slate-500">AI Surveillance</p>
-        </div>
+      <div className="px-5 py-5">
+        <Logo to="/dashboard" onClick={onNavigate} />
       </div>
 
       <nav className="flex-1 space-y-1 px-3">
@@ -46,7 +41,7 @@ function SidebarContent({ onNavigate }) {
             onClick={onNavigate}
             className={({ isActive }) =>
               `flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                isActive ? 'bg-sky-600/15 text-sky-300' : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100'
+                isActive ? 'bg-sky-500/10 text-sky-300 ring-1 ring-sky-400/20' : 'text-slate-400 hover:bg-white/[0.05] hover:text-slate-100'
               }`
             }
           >
@@ -61,21 +56,23 @@ function SidebarContent({ onNavigate }) {
         ))}
       </nav>
 
-      <p className="px-5 py-4 text-xs text-slate-600">Motion + YOLO person detection</p>
+      <Link to="/" onClick={onNavigate} className="px-5 py-4 text-xs text-slate-600 transition-colors hover:text-sky-300">
+        ← Homepage
+      </Link>
     </div>
   )
 }
 
 function Shell() {
-  const { unread } = useAlerts()
+  const { unread, connection } = useAlerts()
   const [menuOpen, setMenuOpen] = useState(false)
   const now = useNow()
   const { data: health, error } = usePolling(api.health, 5000)
   const backendUp = !!health && !error
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 lg:flex">
-      <aside className="hidden w-60 shrink-0 border-r border-slate-800 bg-slate-950 lg:block">
+    <div className="min-h-screen bg-ink bg-[radial-gradient(ellipse_60%_40%_at_70%_-10%,rgb(37_99_235/0.14),transparent)] text-slate-100 lg:flex">
+      <aside className="hidden w-60 shrink-0 border-r border-white/[0.06] bg-black/30 lg:block">
         <div className="sticky top-0 h-screen">
           <SidebarContent />
         </div>
@@ -84,7 +81,7 @@ function Shell() {
       {menuOpen && (
         <div className="fixed inset-0 z-40 lg:hidden">
           <div className="absolute inset-0 bg-black/70" onClick={() => setMenuOpen(false)} />
-          <aside className="absolute inset-y-0 left-0 w-64 border-r border-slate-800 bg-slate-950">
+          <aside className="absolute inset-y-0 left-0 w-64 border-r border-white/[0.06] bg-[#070a10]">
             <button
               onClick={() => setMenuOpen(false)}
               aria-label="Close menu"
@@ -98,7 +95,7 @@ function Shell() {
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-800 bg-slate-950/90 px-4 py-3 backdrop-blur sm:px-6">
+        <header className="sticky top-0 z-30 flex items-center justify-between border-b border-white/[0.06] bg-[#05070b]/80 px-4 py-3 backdrop-blur-xl sm:px-6">
           <div className="flex items-center gap-3">
             <button
               onClick={() => setMenuOpen(true)}
@@ -112,6 +109,17 @@ function Shell() {
               <span className={backendUp ? 'text-slate-300' : 'text-red-400'}>
                 {backendUp ? 'System online' : 'Backend unreachable'}
               </span>
+              {backendUp && (
+                <span
+                  title={connection === 'live' ? 'Alerts are delivered the moment they happen' : 'Reconnecting to the live alert feed; alerts are still checked every few seconds'}
+                  className={`ml-1 hidden items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium sm:inline-flex ${
+                    connection === 'live' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+                  }`}
+                >
+                  <span className={`h-1.5 w-1.5 rounded-full ${connection === 'live' ? 'bg-emerald-400' : 'animate-pulse bg-amber-400'}`} />
+                  {connection === 'live' ? 'Live alerts' : 'Connecting alerts…'}
+                </span>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-4">
@@ -129,6 +137,7 @@ function Shell() {
             </Link>
             <time className="hidden font-mono text-sm tabular-nums text-slate-400 sm:block">{formatClock(now)}</time>
             <AccountMenu />
+            <SignOutButton />
           </div>
         </header>
 
