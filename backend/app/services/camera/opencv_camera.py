@@ -21,6 +21,8 @@ class OpenCVCamera(BaseCamera):
     - `loop=True` rewinds at end-of-file, so a video file behaves like a
       camera that never goes offline (used to test several sources with one
       physical webcam).
+    - `size` / `fps` are *requests* to a local webcam (drivers may pick the
+      nearest mode they support). The mode actually obtained is logged.
     """
 
     def __init__(
@@ -31,10 +33,14 @@ class OpenCVCamera(BaseCamera):
         *,
         network: bool = False,
         loop: bool = False,
+        size: tuple[int, int] | None = None,
+        fps: int | None = None,
     ):
         super().__init__(camera_id, name, source)
         self._network = network
         self._loop = loop
+        self._size = size
+        self._fps = fps
         self._cap: cv2.VideoCapture | None = None
 
     def open(self) -> bool:
@@ -52,11 +58,25 @@ class OpenCVCamera(BaseCamera):
             )
         else:
             cap = cv2.VideoCapture(self.source)
+            if cap.isOpened() and isinstance(self.source, int):
+                if self._size:
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._size[0])
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._size[1])
+                if self._fps:
+                    cap.set(cv2.CAP_PROP_FPS, self._fps)
         if not cap.isOpened():
             cap.release()
             self._cap = None
             return False
         self._cap = cap
+        if self._network or isinstance(self.source, int):
+            logger.info(
+                "Camera %s delivers %dx%d at %.0f fps",
+                self.camera_id,
+                cap.get(cv2.CAP_PROP_FRAME_WIDTH),
+                cap.get(cv2.CAP_PROP_FRAME_HEIGHT),
+                cap.get(cv2.CAP_PROP_FPS),
+            )
         return True
 
     def read(self) -> tuple[bool, np.ndarray | None]:

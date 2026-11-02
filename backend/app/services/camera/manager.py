@@ -12,6 +12,7 @@ from app.services.alerts import raise_alert, resolve_by_key
 from app.services.camera.base import BaseCamera, CameraStatus
 from app.services.camera.factory import CameraSpec, build_camera
 from app.services.detection.detector import Detection, PersonDetector
+from app.services.detection.fire import FireSmokeDetector
 from app.services.faces.service import FaceResult, FaceService
 from app.services.recording.pipeline import MotionEventPipeline
 
@@ -19,15 +20,31 @@ logger = logging.getLogger(__name__)
 
 RETRY_INTERVAL_SECONDS = 3.0
 JPEG_QUALITY = 80
+# The live picture is re-encoded at most this often (a 30 fps camera passes
+# through untouched; this only stops a very fast source from burning CPU).
+STREAM_MAX_FPS = 40
 
 
 class CameraWorker:
     """Owns one camera's background capture thread and its latest frame.
 
-    Every camera gets its own worker, thread, motion detector and recording
+    Every camera gets its own worker, threads, motion detector and recording
     pipeline, so cameras are fully independent: a slow, hung, unplugged or
-    crashing camera only ever affects its own thread — it keeps retrying in
+    crashing camera only ever affects its own threads — it keeps retrying in
     the background while every other camera and the API carry on.
+
+    Two threads per camera, so the AI can never make the video lag:
+
+    * capture (`_run`): reads every frame the camera delivers, as fast as it
+      delivers them, draws the overlays and publishes the live JPEG. It never
+      sleeps (a live source is paced by the camera itself) and never runs a
+      model. Sleeping here is what made drivers that queue frames (RTSP, some
+      webcams) fall seconds behind: reading slower than the camera produces
+      lets the backlog grow.
+    * analysis (`_analyze_loop`): takes the *newest* published frame at most
+      `capture_fps` times a second and runs motion, recording, YOLO, faces and
+      the activity rules. Frames that arrive while it is busy are skipped, not
+      queued, so it is always looking at the present.
     """
 
     def __init__(self, spec: CameraSpec, camera: BaseCamera, pipeline: MotionEventPipeline):
@@ -38,9 +55,13 @@ class CameraWorker:
         self._pipeline = pipeline
         self._latest_jpeg: bytes | None = None
         self._latest_raw: np.ndarray | None = None
+        self._raw_seq = 0  # counts published frames; the analysis thread uses it to spot a new one
         self._lock = threading.Lock()
+        self._frame_ready = threading.Condition(self._lock)
+        self._analysis_lock = threading.Lock()  # one analysis cycle (or the final close()) at a time
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._analysis_thread: threading.Thread | None = None
         self._offline_since: float | None = None
         self._offline_alerted = False
 
@@ -51,14 +72,20 @@ class CameraWorker:
     def start(self) -> None:
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._run, daemon=True, name=f"camera-{self.camera_id}")
+        self._analysis_thread = threading.Thread(target=self._analyze_loop, daemon=True, name=f"analysis-{self.camera_id}")
         self._thread.start()
+        self._analysis_thread.start()
 
     def stop(self) -> None:
         self._stop_event.set()
-        if self._thread is not None:
-            self._thread.join(timeout=8)
+        with self._frame_ready:
+            self._frame_ready.notify_all()
+        for thread in (self._thread, self._analysis_thread):
+            if thread is not None:
+                thread.join(timeout=8)
         self.camera.release()
-        self._pipeline.close()
+        with self._analysis_lock:
+            self._pipeline.close()
 
     def get_status(self) -> CameraStatus:
         with self._lock:
@@ -81,6 +108,9 @@ class CameraWorker:
 
     def get_lighting(self) -> dict:
         return self._pipeline.get_lighting()
+
+    def get_monitoring(self) -> dict:
+        return self._pipeline.get_monitoring()
 
     def set_zones(self, zones: list[ZoneSpec]) -> None:
         self._pipeline.set_zones(zones)
@@ -133,7 +163,11 @@ class CameraWorker:
             )
 
     def _run(self) -> None:
-        min_frame_interval = 1.0 / settings.capture_fps
+        """Capture loop: read, publish, draw, encode. No models, no sleeping
+        (except for video files, which have no clock of their own)."""
+        file_interval = 1.0 / settings.capture_fps if self.spec.type == "file" else None
+        min_encode_gap = 1.0 / STREAM_MAX_FPS
+        last_encoded = 0.0
         while not self._stop_event.is_set():
             self._check_offline_alert()
             if not self.camera.is_opened():
@@ -162,9 +196,10 @@ class CameraWorker:
 
             if not ok or frame is None:
                 logger.warning("Camera %s read failed, marking offline and retrying", self.camera_id)
-                self._set_status(CameraStatus.OFFLINE)
+                self._set_status(CameraStatus.OFFLINE)  # first: the analysis thread skips a stale frame
                 self.camera.release()
-                self._pipeline.close()  # finalize any in-progress recording as "interrupted"
+                with self._analysis_lock:
+                    self._pipeline.close()  # finalize any in-progress recording as "interrupted"
                 with self._lock:
                     self._latest_jpeg = None
                     self._latest_raw = None
@@ -172,25 +207,55 @@ class CameraWorker:
                 continue
 
             self._set_status(CameraStatus.ONLINE)
+            with self._frame_ready:
+                self._latest_raw = frame
+                self._raw_seq += 1
+                self._frame_ready.notify_all()
+
+            if file_interval is None and loop_start - last_encoded < min_encode_gap:
+                continue  # a source faster than STREAM_MAX_FPS: read it all, show most
+            last_encoded = loop_start
 
             display = frame
             try:
-                display = self._pipeline.process(frame)
+                display = self._pipeline.render(frame)
             except Exception:
-                # A bug in motion detection/recording must never take down
-                # capture or the live stream for this (or any other) camera.
-                logger.exception("Motion/recording pipeline error for camera %s", self.camera_id)
-
+                logger.exception("Overlay drawing failed for camera %s", self.camera_id)
             encode_ok, buffer = cv2.imencode(".jpg", display, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
-            with self._lock:
-                self._latest_raw = frame
-                if encode_ok:
+            if encode_ok:
+                with self._lock:
                     self._latest_jpeg = buffer.tobytes()
 
-            elapsed = time.monotonic() - loop_start
-            self._stop_event.wait(max(0.0, min_frame_interval - elapsed))
+            if file_interval is not None:
+                self._stop_event.wait(max(0.0, file_interval - (time.monotonic() - loop_start)))
 
         self.camera.release()
+
+    def _analyze_loop(self) -> None:
+        """Analysis loop: newest frame in, at most `capture_fps` cycles a
+        second. A cycle that overruns simply skips the frames that arrived
+        meanwhile, so detection never falls behind the live picture."""
+        min_interval = 1.0 / settings.capture_fps
+        seen = 0
+        while not self._stop_event.is_set():
+            with self._frame_ready:
+                self._frame_ready.wait_for(lambda: self._raw_seq != seen or self._stop_event.is_set(), timeout=1.0)
+                if self._stop_event.is_set():
+                    return
+                if self._raw_seq == seen or self._latest_raw is None:
+                    continue
+                seen, frame = self._raw_seq, self._latest_raw
+
+            started = time.monotonic()
+            with self._analysis_lock:
+                if self.get_status() == CameraStatus.ONLINE:  # not a leftover frame of a camera that just dropped
+                    try:
+                        self._pipeline.analyze(frame)
+                    except Exception:
+                        # A bug in motion detection/recording must never take down
+                        # capture or the live stream for this (or any other) camera.
+                        logger.exception("Motion/recording pipeline error for camera %s", self.camera_id)
+            self._stop_event.wait(max(0.0, min_interval - (time.monotonic() - started)))
 
 
 class CameraManager:
@@ -206,6 +271,10 @@ class CameraManager:
         self._lock = threading.RLock()
         self._person_detector: PersonDetector | None = None
         self._face_service: FaceService | None = None
+        self._fire_detector: FireSmokeDetector | None = None
+
+    def set_fire_detector(self, detector: FireSmokeDetector | None) -> None:
+        self._fire_detector = detector
 
     def set_person_detector(self, detector: PersonDetector | None) -> None:
         self._person_detector = detector
@@ -222,7 +291,7 @@ class CameraManager:
         except Exception:
             logger.exception("Camera %s could not be created, not started", spec.id)
             return
-        pipeline = MotionEventPipeline(spec.id, self._person_detector, self._face_service)
+        pipeline = MotionEventPipeline(spec.id, self._person_detector, self._face_service, self._fire_detector)
         try:
             pipeline.set_zones(load_zone_specs(spec.id))
         except Exception:
@@ -290,13 +359,14 @@ class CameraManager:
             "people_detected": len(detections),
             "detections": [{"confidence": d.confidence, "bbox": d.bbox} for d in detections],
             "faces": [
-                {"label": f.label, "name": f.name, "similarity": f.similarity, "reason": f.reason} for f in faces
+                {"label": f.label, "name": f.name, "similarity": f.similarity, "reason": f.reason, "detail": f.detail} for f in faces
             ],
             "lighting": worker.get_lighting() if worker.get_status() == CameraStatus.ONLINE else None,
+            "monitoring": worker.get_monitoring() if worker.get_status() == CameraStatus.ONLINE else None,
         }
 
 
-EMPTY_RUNTIME = {"recording": False, "people_detected": 0, "detections": [], "faces": [], "lighting": None}
+EMPTY_RUNTIME = {"recording": False, "people_detected": 0, "detections": [], "faces": [], "lighting": None, "monitoring": None}
 
 camera_manager = CameraManager()
 

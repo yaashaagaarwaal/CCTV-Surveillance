@@ -11,7 +11,7 @@ from app.services.faces.storage import resolve
 
 logger = logging.getLogger(__name__)
 
-ALERT_TYPES = ("unknown_person", "restricted_area", "suspicious_activity", "camera_offline")
+ALERT_TYPES = ("unknown_person", "restricted_area", "suspicious_activity", "camera_offline", "fire", "smoke")
 SEVERITIES = ("low", "medium", "high", "critical")
 SEVERITY_RANK = {name: rank for rank, name in enumerate(SEVERITIES)}
 

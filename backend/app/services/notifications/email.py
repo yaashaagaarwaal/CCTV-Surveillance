@@ -14,6 +14,8 @@ TYPE_TITLES = {
     "restricted_area": "Person in restricted area",
     "suspicious_activity": "Suspicious activity",
     "camera_offline": "Camera offline",
+    "fire": "Fire detected",
+    "smoke": "Smoke detected",
 }
 
 

@@ -75,7 +75,8 @@ def mask_source(camera_type: str, source: str) -> str:
 
 def build_camera(spec: CameraSpec) -> BaseCamera:
     if spec.type == "webcam":
-        return OpenCVCamera(spec.id, spec.name, int(spec.source))
+        size = (settings.webcam_width, settings.webcam_height) if settings.webcam_width and settings.webcam_height else None
+        return OpenCVCamera(spec.id, spec.name, int(spec.source), size=size, fps=settings.webcam_fps or None)
     if spec.type == "file":
         path = _resolve_video_file(spec.source)
         return OpenCVCamera(spec.id, spec.name, str(path), loop=True)
