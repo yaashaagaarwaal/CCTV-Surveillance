@@ -19,8 +19,8 @@ function describeRules(zone) {
   return parts.length ? parts.join(' · ') : 'intrusion only'
 }
 
-/** Security hours and fall detection for one camera (not tied to a zone). */
-function CameraRules({ camera, canEdit }) {
+/** Security hours, crowd limit and fall detection for one camera (not tied to a zone). */
+function CameraRules({ camera, canEdit, zones }) {
   const [rules, setRules] = useState(null)
   const [message, setMessage] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -34,6 +34,7 @@ function CameraRules({ camera, canEdit }) {
 
   if (!rules) return message ? <ErrorBanner>{message.text}</ErrorBanner> : <Spinner className="h-5 w-5" />
   const hoursOn = Boolean(rules.quiet_start && rules.quiet_end)
+  const crowdOn = rules.crowd_threshold > 0
   const patch = (changes) => {
     setMessage(null)
     setRules((r) => ({ ...r, ...changes }))
@@ -71,13 +72,46 @@ function CameraRules({ camera, canEdit }) {
           <span className="text-xs text-slate-500">(server's local time; may cross midnight)</span>
         </div>
       )}
+      <label className="flex cursor-pointer flex-wrap items-center gap-2 text-sm text-slate-300">
+        <input
+          type="checkbox"
+          disabled={!canEdit}
+          checked={crowdOn}
+          onChange={(e) => patch(e.target.checked ? { crowd_threshold: 3, crowd_seconds: rules.crowd_seconds || 10 } : { crowd_threshold: 0, crowd_zone_id: null })}
+          className="h-4 w-4 accent-sky-500"
+        />
+        Alert when at least
+        <input type="number" min="2" max="50" disabled={!canEdit || !crowdOn} className={inlineInput('w-16')} value={crowdOn ? rules.crowd_threshold : 3} onChange={(e) => patch({ crowd_threshold: Number(e.target.value) })} />
+        people stay for
+        <input type="number" min="3" max="3600" disabled={!canEdit || !crowdOn} className={inlineInput('w-20')} value={rules.crowd_seconds} onChange={(e) => patch({ crowd_seconds: Number(e.target.value) })} />
+        seconds
+      </label>
+      {crowdOn && (
+        <div className="space-y-1 pl-6 text-sm text-slate-300">
+          <label className="flex items-center gap-2">
+            counting
+            <select disabled={!canEdit} className={inlineInput('w-auto')} value={rules.crowd_zone_id ?? ''} onChange={(e) => patch({ crowd_zone_id: e.target.value === '' ? null : Number(e.target.value) })} aria-label="Where to count people">
+              <option value="">everyone in the picture</option>
+              {zones.map((zone) => (
+                <option key={zone.id} value={zone.id}>
+                  only people standing in "{zone.name}"
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="text-xs text-slate-500">
+            This is "at least N", not an exact count. A standard person detector finds people one by one: those who overlap, stand behind each other or are partly hidden are missed, so a dense crowd is
+            under-counted. Counts update while the camera sees movement.
+          </p>
+        </div>
+      )}
       <label className="flex cursor-pointer items-start gap-2 text-sm text-slate-300">
         <input type="checkbox" disabled={!canEdit} checked={rules.fall_detection} onChange={(e) => patch({ fall_detection: e.target.checked })} className="mt-0.5 h-4 w-4 accent-sky-500" />
         <span>
-          Watch for fall-like movement
+          Watch for fall-like movement <Badge tone="amber">experimental</Badge>
           <span className="block text-xs text-slate-500">
-            Experimental. Judged from the person's outline only: it flags someone who goes from upright to lying within a few seconds and stays down. It misses falls that are
-            partly hidden or seen from above, and can fire when someone lies down quickly on purpose.
+            Off by default. Judged from the person's outline only, not their body pose: it flags someone who goes from upright to lying within a few seconds and stays down. It misses falls that are
+            partly hidden or seen from above, and fires when someone lies down quickly on purpose. It is not a safety device: every fall-like alert needs a person to review the recording.
           </span>
         </span>
       </label>
@@ -115,6 +149,7 @@ export default function ZonesModal({ camera, canEdit, onClose }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [imageFailed, setImageFailed] = useState(false)
+  const [ratio, setRatio] = useState(null) // the picture's own width / height, once loaded
   const canvas = useRef(null)
   const online = camera.status === 'online'
 
@@ -176,10 +211,20 @@ export default function ZonesModal({ camera, canEdit, onClose }) {
         <div
           ref={canvas}
           onClick={addPoint}
-          className={`relative aspect-video overflow-hidden rounded-lg bg-slate-950 ${canEdit ? 'cursor-crosshair' : ''}`}
+          style={{ aspectRatio: online && !imageFailed ? (ratio ?? 16 / 9) : 16 / 9 }}
+          className={`relative overflow-hidden rounded-lg bg-slate-950 ${canEdit ? 'cursor-crosshair' : ''}`}
         >
           {online && !imageFailed ? (
-            <img src={`${snapshotUrl(camera.id)}?t=${camera.id}`} alt="" onError={() => setImageFailed(true)} className="h-full w-full object-cover" draggable={false} />
+            // The box takes the picture's own shape (and the image fills it exactly), so a click at 40% across is 40% across the
+            // real frame, which is what the server uses. Cropping the picture to a 16:9 box would shift every zone on a 4:3 camera.
+            <img
+              src={`${snapshotUrl(camera.id)}?t=${camera.id}`}
+              alt=""
+              onLoad={(e) => setRatio(e.currentTarget.naturalWidth / e.currentTarget.naturalHeight)}
+              onError={() => setImageFailed(true)}
+              className="h-full w-full object-fill"
+              draggable={false}
+            />
           ) : (
             <div className="flex h-full items-center justify-center px-6 text-center text-sm text-slate-500">
               The camera is offline, so there's no picture to draw on. You can still place zones on this blank frame.
@@ -288,7 +333,7 @@ export default function ZonesModal({ camera, canEdit, onClose }) {
             </ul>
           )}
         </div>
-        <CameraRules camera={camera} canEdit={canEdit} />
+        <CameraRules camera={camera} canEdit={canEdit} zones={zones ?? []} />
 
         <p className="text-xs text-slate-500">
           A person counts as inside a zone when their feet (the bottom-centre of their detected box) are inside it, for two detection cycles in a row, and as having left once the zone has been empty for a few seconds. Detection runs while the

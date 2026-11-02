@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Maximize2, Minimize2, Moon, User, VideoOff } from 'lucide-react'
+import { CloudFog, Flame, Maximize2, Minimize2, Moon, User, Users, VideoOff } from 'lucide-react'
 import { snapshotUrl, streamUrl } from '../api'
 import { useNow } from '../hooks/useNow'
+import MonitoringStrip from './MonitoringStrip'
 import { formatClock, percent } from '../utils/format'
 import { Spinner } from './ui'
 
@@ -42,6 +43,18 @@ export default function CameraTile({ camera, live }) {
   const alerting = online && people > 0
   const bestConfidence = alerting ? Math.max(...camera.detections.map((d) => d.confidence)) : null
 
+  const monitoring = online ? camera.monitoring : null
+  const crowd = monitoring?.crowd
+  // Shown once there is a limit to watch, or two or more people to count. "3+" means at least three (overlap or a big group).
+  const showCrowd = online && crowd && (crowd.threshold > 0 || crowd.count >= 2)
+
+  // Fire / smoke: red once an alert was raised or it is in view, amber while it is still being confirmed (needs several checks).
+  const fireState = online ? monitoring?.fire : null
+  const fireChips = ['fire', 'smoke']
+    .map((kind) => ({ kind, ...(fireState?.[kind] ?? {}) }))
+    .filter((f) => f.active || f.seen || f.hits > 0)
+    .map((f) => ({ ...f, confirmed: f.active, text: f.active ? f.kind.toUpperCase() : `POSSIBLE ${f.kind.toUpperCase()} ${f.hits}/${f.needed}` }))
+
   const lighting = online ? camera.lighting : null
   const nightLabel = lighting?.night ? (lighting.kind === 'infrared' ? 'NIGHT · IR' : 'NIGHT MODE') : null
 
@@ -49,6 +62,8 @@ export default function CameraTile({ camera, live }) {
   const knownNames = [...new Set(faces.filter((f) => f.label === 'known').map((f) => f.name))]
   const unknownCount = faces.filter((f) => f.label === 'unknown').length
   const unsureCount = faces.filter((f) => f.label === 'uncertain').length
+  // Why a face was not called known or unknown (too small, turned away, too dark...).
+  const unsureWhy = [...new Set(faces.filter((f) => f.label === 'uncertain' && f.reason).map((f) => f.reason))].join(', ')
   // Red = a stranger is in view; green = everyone in view is recognized.
   const ring = unknownCount > 0 ? 'red' : alerting && knownNames.length > 0 && unsureCount === 0 ? 'green' : alerting ? 'amber' : 'none'
   const RING_STYLES = {
@@ -118,6 +133,31 @@ export default function CameraTile({ camera, live }) {
                   REC
                 </span>
               )}
+              {fireChips.map((f) => (
+                <span
+                  key={f.kind}
+                  title="From the fire/smoke AI model. It needs several checks in a row before it raises an alert."
+                  className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-bold tracking-wide ${
+                    f.confirmed ? 'bg-red-600/90 text-white' : 'bg-amber-500/90 text-black'
+                  }`}
+                >
+                  {f.kind === 'fire' ? <Flame className="h-3 w-3" /> : <CloudFog className="h-3 w-3" />}
+                  {f.text}
+                  {f.confidence != null && ` · ${Math.round(f.confidence * 100)}%`}
+                </span>
+              ))}
+              {showCrowd && (
+                <span
+                  className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-bold tracking-wide ${
+                    crowd.over ? 'bg-red-600/90 text-white' : 'bg-slate-800/90 text-slate-100'
+                  }`}
+                >
+                  <Users className="h-3 w-3" />
+                  {crowd.count}
+                  {crowd.approximate ? '+' : ''} in {crowd.region ?? 'view'}
+                  {crowd.threshold > 0 && ` / limit ${crowd.threshold}`}
+                </span>
+              )}
             </div>
             {alerting && (
               <span
@@ -146,7 +186,7 @@ export default function CameraTile({ camera, live }) {
                 )}
                 {unsureCount > 0 && (
                   <span className="rounded bg-orange-500/90 px-1.5 py-0.5 text-[11px] font-bold text-black">
-                    {unsureCount} NOT SURE
+                    {unsureCount} NOT SURE{unsureWhy && ` · ${unsureWhy}`}
                   </span>
                 )}
               </div>
@@ -165,6 +205,7 @@ export default function CameraTile({ camera, live }) {
             {expanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
           </button>
         </div>
+        {!expanded && online && <MonitoringStrip monitoring={monitoring} />}
       </div>
     </>
   )

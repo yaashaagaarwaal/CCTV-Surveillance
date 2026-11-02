@@ -18,13 +18,17 @@ const PAGE_SIZE = 12
 function Why({ alert }) {
   const d = alert.details ?? {}
   const rule = RULES[d.rule]
-  if (!rule && !d.zone) return null
+  if (!rule && !d.zone && !d.explanation) return null
   return (
     <p className="text-xs text-slate-400" title={rule?.help}>
       {rule && <span className="font-medium text-slate-300">{rule.label}</span>}
       {d.zone && <span>{rule ? ' · ' : ''}Zone: {d.zone}</span>}
-      {d.confidence != null && <span> · person detection {Math.round(d.confidence * 100)}%</span>}
+      {d.confidence != null && (
+        <span> · {d.rule === 'fire' || d.rule === 'smoke' ? 'model confidence' : 'person detection'} {Math.round(d.confidence * 100)}%</span>
+      )}
       {d.rule === 'fall_like' && <span className="text-amber-300"> · estimate from outline only, can be wrong</span>}
+      {d.explanation && <span className="mt-0.5 block text-slate-500">{d.explanation}</span>}
+      {d.rule === 'crowd' && <span className="mt-0.5 block text-slate-500">{d.note}</span>}
     </p>
   )
 }

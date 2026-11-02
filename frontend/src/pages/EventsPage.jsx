@@ -116,6 +116,8 @@ export default function EventsPage() {
         </select>
         <select className={inputClass} value={filters.type} onChange={(e) => setFilter('type', e.target.value)} aria-label="Filter by type">
           <option value="">All event types</option>
+          <option value="fire">Fire</option>
+          <option value="smoke">Smoke</option>
           <option value="restricted_area">Restricted area</option>
           <option value="unknown_person">Unknown person</option>
           <option value="suspicious_activity">Suspicious activity</option>
@@ -172,41 +174,41 @@ export default function EventsPage() {
             <table className="w-full min-w-[40rem] text-left text-sm">
               <thead>
                 <tr className="border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">
-                  <th className="px-4 py-3 font-medium">Camera</th>
-                  <th className="px-4 py-3 font-medium">Time</th>
-                  <th className="px-4 py-3 font-medium">Type</th>
-                  <th className="hidden px-4 py-3 font-medium lg:table-cell">Recognized</th>
-                  <th className="hidden px-4 py-3 font-medium md:table-cell">Confidence</th>
-                  <th className="hidden px-4 py-3 font-medium sm:table-cell">Duration</th>
-                  <th className="px-4 py-3 font-medium">Status</th>
-                  <th className="px-4 py-3" />
+                  <th className="px-3 py-3 xl:px-4 font-medium">Camera</th>
+                  <th className="px-3 py-3 xl:px-4 font-medium">Time</th>
+                  <th className="px-3 py-3 xl:px-4 font-medium">Type</th>
+                  <th className="hidden px-3 py-3 xl:px-4 font-medium lg:table-cell">Recognized</th>
+                  <th className="hidden px-3 py-3 xl:px-4 font-medium md:table-cell">Confidence</th>
+                  <th className="hidden px-3 py-3 xl:px-4 font-medium sm:table-cell lg:hidden xl:table-cell">Duration</th>
+                  <th className="px-3 py-3 xl:px-4 font-medium">Status</th>
+                  <th className="px-3 py-3 xl:px-4" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
                 {items.map((event) => (
                   <Fragment key={event.id}>
-                  <tr className={`hover:bg-slate-800/30 ${event.reasons?.length ? 'border-b-0' : ''}`}>
-                    <td className="px-4 py-3 font-medium">{nameOf(event.camera_id)}</td>
-                    <td className="px-4 py-3 text-slate-400">
+                  <tr className={`hover:bg-slate-800/30 ${event.reasons?.length || event.uncertain_reasons?.length ? 'border-b-0' : ''}`}>
+                    <td className="px-3 py-3 xl:px-4 font-medium">{nameOf(event.camera_id)}</td>
+                    <td className="px-3 py-3 xl:px-4 text-slate-400">
                       <span className="block text-slate-300">{formatDateTime(event.timestamp)}</span>
                       <span className="text-xs">{timeAgo(event.timestamp)}</span>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-3 xl:px-4">
                       <EventTypeBadge type={event.event_type} />
                     </td>
-                    <td className="hidden px-4 py-3 lg:table-cell">
+                    <td className="hidden px-3 py-3 xl:px-4 lg:table-cell">
                       <PeopleSummary event={event} />
                     </td>
-                    <td className="hidden px-4 py-3 tabular-nums text-slate-400 md:table-cell">{percent(event.max_confidence)}</td>
-                    <td className="hidden px-4 py-3 tabular-nums text-slate-400 sm:table-cell">{formatDuration(event)}</td>
-                    <td className="px-4 py-3">
+                    <td className="hidden px-3 py-3 xl:px-4 tabular-nums text-slate-400 md:table-cell">{percent(event.max_confidence)}</td>
+                    <td className="hidden px-3 py-3 xl:px-4 tabular-nums text-slate-400 sm:table-cell lg:hidden xl:table-cell">{formatDuration(event)}</td>
+                    <td className="px-3 py-3 xl:px-4">
                       <EventStatusBadge status={event.status} />
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-3 xl:px-4">
                       <EventActions event={event} onPlay={setPlaying} onDelete={askDelete} canDelete={isAdmin} />
                     </td>
                   </tr>
-                  {event.reasons?.length > 0 && (
+                  {(event.reasons?.length > 0 || event.uncertain_reasons?.length > 0) && (
                     <tr className="bg-slate-900/40">
                       <td colSpan={8} className="px-4 pb-3 pt-0">
                         <EventReasons event={event} limit={3} />

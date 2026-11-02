@@ -1,11 +1,13 @@
 import { useState } from 'react'
-import { Download, Eye, Film, OctagonAlert, Play, ShieldAlert, Trash2, User } from 'lucide-react'
+import { CloudFog, Download, Eye, Film, Flame, OctagonAlert, Play, ShieldAlert, Trash2, User } from 'lucide-react'
 import { downloadUrl, thumbnailUrl } from '../api'
 import { formatBytes, formatDateTime, formatDuration, percent, timeAgo } from '../utils/format'
 import { Badge } from './ui'
 import { PeopleSummary } from './EventBadges'
 
 const BADGES = {
+  fire: { label: 'FIRE', cls: 'bg-red-600 text-white', icon: Flame },
+  smoke: { label: 'SMOKE', cls: 'bg-red-600 text-white', icon: CloudFog },
   restricted_area: { label: 'RESTRICTED AREA', cls: 'bg-red-600 text-white', icon: OctagonAlert },
   unknown_person: { label: 'UNKNOWN PERSON', cls: 'bg-red-600 text-white', icon: ShieldAlert },
   suspicious_activity: { label: 'SUSPICIOUS', cls: 'bg-amber-500 text-black', icon: Eye },

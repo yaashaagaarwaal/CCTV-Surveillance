@@ -1,10 +1,12 @@
 import { Link } from 'react-router-dom'
-import { Activity, ChevronRight, Eye, OctagonAlert, Play, ShieldAlert, User } from 'lucide-react'
+import { Activity, ChevronRight, CloudFog, Eye, Flame, OctagonAlert, Play, ShieldAlert, User } from 'lucide-react'
 import { formatDateTime, percent, timeAgo } from '../utils/format'
 import { Card } from './ui'
 import { EventStatusBadge } from './EventBadges'
 
 function eventTitle(event) {
+  if (event.event_type === 'fire') return 'Fire detected'
+  if (event.event_type === 'smoke') return 'Smoke detected'
   if (event.event_type === 'restricted_area') return 'Person in restricted area'
   if (event.event_type === 'unknown_person') return 'Unknown person'
   if (event.event_type === 'suspicious_activity') return 'Suspicious activity'
@@ -13,6 +15,8 @@ function eventTitle(event) {
 }
 
 const STYLE = {
+  fire: ['bg-red-500/15 text-red-400', Flame],
+  smoke: ['bg-red-500/15 text-red-400', CloudFog],
   restricted_area: ['bg-red-500/15 text-red-400', OctagonAlert],
   unknown_person: ['bg-red-500/15 text-red-400', ShieldAlert],
   suspicious_activity: ['bg-amber-500/15 text-amber-400', Eye],

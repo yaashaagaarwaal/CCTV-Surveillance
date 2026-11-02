@@ -1,8 +1,8 @@
-import { Activity, Eye, OctagonAlert, ShieldAlert, User } from 'lucide-react'
+import { Activity, CloudFog, Eye, Flame, OctagonAlert, ShieldAlert, User } from 'lucide-react'
 import { EVENT_TYPES, SEVERITIES, ruleLabel } from '../utils/meta'
 import { Badge } from './ui'
 
-const TYPE_ICONS = { motion: Activity, person: User, suspicious_activity: Eye, unknown_person: ShieldAlert, restricted_area: OctagonAlert }
+const TYPE_ICONS = { motion: Activity, person: User, suspicious_activity: Eye, unknown_person: ShieldAlert, restricted_area: OctagonAlert, smoke: CloudFog, fire: Flame }
 
 export function EventTypeBadge({ type }) {
   const meta = EVENT_TYPES[type] ?? { label: type, tone: 'slate' }
@@ -52,7 +52,8 @@ export function PeopleSummary({ event }) {
 // Why an event was flagged: the rule-based alerts raised during it, in plain words.
 export function EventReasons({ event, limit }) {
   const reasons = event.reasons ?? []
-  if (!reasons.length) return null
+  const unsure = event.uncertain_reasons ?? []
+  if (!reasons.length && !unsure.length) return null
   const shown = limit ? reasons.slice(0, limit) : reasons
   return (
     <ul className="space-y-1">
@@ -64,6 +65,7 @@ export function EventReasons({ event, limit }) {
         </li>
       ))}
       {limit && reasons.length > limit && <li className="text-xs text-slate-500">+{reasons.length - limit} more</li>}
+      {unsure.length > 0 && <li className="text-xs text-orange-300/90">Face not judged: {unsure.join(' · ')}</li>}
     </ul>
   )
 }

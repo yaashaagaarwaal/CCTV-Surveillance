@@ -183,8 +183,8 @@ export default function DashboardPreview() {
           <span className="h-2.5 w-2.5 rounded-full bg-amber-400/70" />
           <span className="h-2.5 w-2.5 rounded-full bg-emerald-500/70" />
           <span className="ml-3 hidden flex-1 rounded-md bg-white/[0.05] px-3 py-1 text-center text-[11px] text-slate-500 sm:block">localhost / dashboard</span>
-          <span className="ml-auto flex items-center gap-1.5 text-[10px] text-emerald-400 sm:ml-0">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> System online
+          <span className="ml-auto rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300 sm:ml-0">
+            Sample data
           </span>
         </div>
 
@@ -243,7 +243,7 @@ export default function DashboardPreview() {
           <span className="text-slate-400">Unknown person at the entrance</span>
         </span>
       </div>
-      <p className="mt-4 text-center text-xs text-slate-600">Illustrative preview with sample data. The real dashboard shows your own cameras live.</p>
+      <p className="mt-4 text-center text-xs text-slate-400">Illustrative preview with sample data, not a live feed. The real dashboard shows your own cameras and only real figures.</p>
     </div>
   )
 }

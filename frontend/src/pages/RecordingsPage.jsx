@@ -91,6 +91,8 @@ export default function RecordingsPage() {
           aria-label="Filter by type"
         >
           <option value="">All clips</option>
+          <option value="fire">Fire</option>
+          <option value="smoke">Smoke</option>
           <option value="restricted_area">Restricted area</option>
           <option value="unknown_person">Unknown person</option>
           <option value="suspicious_activity">Suspicious activity</option>
