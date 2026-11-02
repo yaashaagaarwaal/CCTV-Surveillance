@@ -9,10 +9,13 @@ import numpy as np
 from app.core.config import settings
 from app.db.models import Event, PersonDetection
 from app.db.session import SessionLocal
+from app.services.activity.crowd import unique_people
+from app.services.activity.fire import VISIBLE_SECONDS, FireMonitor, draw_boxes as draw_fire_boxes
 from app.services.activity.monitor import ActivityMonitor
 from app.services.activity.rules import RulesSpec
 from app.services.activity.zones import ZoneSpec, draw_zones
 from app.services.detection.detector import Detection, PersonDetector
+from app.services.detection.fire import FireDetection, FireSmokeDetector
 from app.services.faces.service import FaceResult, FaceService
 from app.services.faces.tracker import FaceEventTracker, draw_faces
 from app.services.motion.detector import MotionDetector
@@ -29,14 +32,13 @@ PERSON_BOX_COLOR = (230, 170, 40)  # BGR; kept distinct from the green/red/orang
 class MotionEventPipeline:
     """Per-camera: feed it frames, it detects motion, runs YOLO, and manages recordings.
 
-    Runs entirely inside the camera's own capture thread (see
-    CameraWorker._run) — there is no separate recording or detection thread.
-    That thread is already a background thread relative to FastAPI's event
-    loop/HTTP handling, so the live stream (served from a lock-protected
-    "latest frame" the capture thread updates independently) is never
-    blocked by motion detection, YOLO inference, or video encoding here; at
-    most, heavy work adds a little latency to this camera's own capture
-    loop, never to the HTTP server or other cameras.
+    `analyze()` (motion, recording, YOLO, faces, rules) is the expensive part and
+    runs on the camera's analysis thread; `render()` only draws the latest
+    results onto a frame and is cheap enough to run on the capture thread
+    for every frame (see CameraWorker). That split is what keeps the live
+    picture smooth while YOLO or face recognition is busy: a slow analysis
+    cycle delays the boxes by a few frames, never the video itself.
+    `process()` does both in one call (used by tests and simple callers).
 
     YOLO only ever runs while a motion-triggered recording is already
     active, and even then only every `detection.run_every_n_frames` frames
@@ -50,6 +52,7 @@ class MotionEventPipeline:
         camera_id: str,
         person_detector: PersonDetector | None,
         face_service: FaceService | None = None,
+        fire_detector: FireSmokeDetector | None = None,
     ):
         self.camera_id = camera_id
         cfg = settings.motion
@@ -72,9 +75,17 @@ class MotionEventPipeline:
         self._face_service = face_service
         self._face_tracker = FaceEventTracker(camera_id, settings.face)
 
+        # Shared across cameras; None = fire/smoke detection unavailable/disabled. Runs on its own clock (one pass per
+        # `fire.interval_seconds`), whether or not anything moves or is being recorded.
+        self._fire_detector = fire_detector
+        self._fire = FireMonitor(camera_id, settings.fire) if fire_detector is not None else None
+        self._last_fire_check = float("-inf")
+        self._live_fire: tuple[float, list[FireDetection]] = (float("-inf"), [])
+
         # Night handling (see services/night): lighting is measured every frame.
         self._lighting = LightingAnalyzer(settings.night)
-        self._enhancer = LowLightEnhancer(settings.night)
+        self._enhancer = LowLightEnhancer(settings.night)  # analysis thread (detection)
+        self._view_enhancer = LowLightEnhancer(settings.night)  # capture thread (live view); CLAHE isn't thread-safe
         self._night = False
 
         # Restricted zones + suspicious-activity rules (see services/activity).
@@ -91,10 +102,14 @@ class MotionEventPipeline:
         self._live_lock = threading.Lock()
 
     def process(self, frame: np.ndarray) -> np.ndarray:
-        """Feed one frame. Returns the frame to show live: the same array,
-        or an annotated copy while people are in view / zones are drawn. The
-        raw frame itself is never modified (recordings and face registration
-        use it as is)."""
+        """Feed one frame and return the frame to show live (analyze + render)."""
+        self.analyze(frame)
+        return self.render(frame)
+
+    def analyze(self, frame: np.ndarray) -> None:
+        """Feed one frame: lighting, motion, recording, person/face detection
+        and the activity rules. The raw frame is never modified (recordings
+        and face registration use it as is)."""
         night_cfg = settings.night
         lighting = self._lighting.update(frame)
         if lighting.night != self._night:
@@ -104,10 +119,12 @@ class MotionEventPipeline:
         motion = self._detector.process(frame, denoise=self._night and night_cfg.motion_denoise)
         now = time.monotonic()
 
+        self._check_fire(frame, now)  # before the recording branch below, which returns
+
         if self._writer is not None:
             self._writer.write(frame)  # archive the raw, unannotated frame
-            if motion:
-                self._last_motion_at = now
+            if motion or (self._fire is not None and self._fire.episode_active()):
+                self._last_motion_at = now  # fire/smoke in view is activity: keep the evidence recording
 
             self._run_person_detection(frame)
 
@@ -120,7 +137,7 @@ class MotionEventPipeline:
                 # so a long visit is covered end to end.
                 still_active = idle_time < cfg.post_motion_seconds
                 self._finalize(status="completed", continuing=still_active and self._person_present)
-            return self._render(frame)
+            return
 
         if self._continue_next or motion:
             cooling = (
@@ -131,7 +148,43 @@ class MotionEventPipeline:
             if not cooling:
                 self._continue_next = False
                 self._start(frame)
-        return self._render(frame)
+            elif motion and self._person_detector is not None and self._person_during_cooldown(frame):
+                self._start(frame)  # the cooldown stops a motion-only event repeating; it must never hide a person
+
+    def _check_fire(self, frame: np.ndarray, now: float) -> None:
+        """Fire/smoke check, at most once per `fire.interval_seconds`. Runs on the analysis thread: the live picture never waits for it,
+        and any failure is contained here (the camera, recording, people and faces carry on)."""
+        if self._fire_detector is None or self._fire is None:
+            return
+        if now - self._last_fire_check < settings.fire.interval_seconds:
+            return
+        self._last_fire_check = now
+        try:
+            detections = self._fire_detector.detect(frame)
+            with self._live_lock:
+                self._live_fire = (now, detections)
+            confirmed = self._fire.update(detections, now)
+            if confirmed and self._writer is None:
+                self._start(frame)  # evidence: a fire clip, even in a room where nothing moved
+            for found in confirmed:
+                self._fire.alert(found, frame, self._event_id)
+        except Exception:
+            self._log_rate_limited("fire", "fire/smoke detection failed")
+
+    def _person_during_cooldown(self, frame: np.ndarray) -> bool:
+        """While a new recording is held back, keep looking (every few frames, only while something moves) for a person.
+        Without this, someone who walks in during the cooldown and then stands still produces no more motion, so nothing
+        would ever start watching them: no intrusion, no loitering."""
+        self._frames_since_detection += 1
+        if self._frames_since_detection < settings.detection.run_every_n_frames:
+            return False
+        self._frames_since_detection = 0
+        try:
+            found, _ = self._find_people(frame)
+        except Exception:
+            self._log_rate_limited("cooldown_probe", "looking for a person during the cooldown failed")
+            return False
+        return bool(found)
 
     def set_zones(self, zones: list[ZoneSpec]) -> None:
         self._zones = zones
@@ -139,6 +192,12 @@ class MotionEventPipeline:
 
     def set_rules(self, rules: RulesSpec) -> None:
         self._activity.set_rules(rules)
+
+    def get_monitoring(self) -> dict:
+        """What this camera is watching for, and how it stands now (zones, security hours, crowd)."""
+        status = self._activity.status()
+        status["fire"] = self._fire.status() if self._fire is not None else None  # None = fire/smoke detection is off
+        return status
 
     def get_lighting(self) -> dict:
         state = self._lighting.state.as_dict()
@@ -178,23 +237,33 @@ class MotionEventPipeline:
             self._frames_since_detection = 0
             self._detect_people(frame)
 
-    def _detect_people(self, frame: np.ndarray) -> None:
+    def _find_people(self, frame: np.ndarray) -> tuple[list[Detection], np.ndarray]:
+        """The distinct people in this frame, and the picture they were found in (the raw frame, or the enhanced copy at night)."""
         night_cfg = settings.night
         night = self._night
+        detect_frame = frame
+        confidence = night_cfg.person_confidence if night else None
+        # Duplicate boxes round one person are merged first (see activity/crowd.py): otherwise a
+        # night pass that merely draws a second box round the same person would "find more".
+        # A camera with a crowd limit looks at a larger picture: at the default size people standing close together are lost.
+        size = {"imgsz": settings.detection.crowd_imgsz} if self._activity.rules.crowd_threshold > 0 else {}
+        detections = unique_people(self._person_detector.detect(frame, confidence=confidence, **size))
+        if night and night_cfg.enhance_for_detection:
+            # Enhancement helps in very dark scenes but can hurt in moderate
+            # low light, so at night both versions are tried and the one
+            # that finds more distinct people wins (scripts/night_benchmark.py).
+            # The boxes apply to the raw frame just the same; the raw frame
+            # is what gets recorded.
+            enhanced = self._enhancer.apply(frame)
+            enhanced_detections = unique_people(self._person_detector.detect(enhanced, confidence=confidence, **size))
+            if len(enhanced_detections) > len(detections):
+                detections, detect_frame = enhanced_detections, enhanced
+        return detections, detect_frame
+
+    def _detect_people(self, frame: np.ndarray) -> None:
+        night = self._night
         try:
-            detect_frame = frame
-            confidence = night_cfg.person_confidence if night else None
-            detections = self._person_detector.detect(frame, confidence=confidence)
-            if night and night_cfg.enhance_for_detection:
-                # Enhancement helps in very dark scenes but can hurt in moderate
-                # low light, so at night both versions are tried and the one
-                # that finds more people wins (measured: never worse than
-                # either alone). The boxes apply to the raw frame just the
-                # same; the raw frame is what gets recorded.
-                enhanced = self._enhancer.apply(frame)
-                enhanced_detections = self._person_detector.detect(enhanced, confidence=confidence)
-                if len(enhanced_detections) > len(detections):
-                    detections, detect_frame = enhanced_detections, enhanced
+            detections, detect_frame = self._find_people(frame)
         except Exception:
             logger.exception("Camera %s: person detection failed on this frame, skipping", self.camera_id)
             return
@@ -246,24 +315,29 @@ class MotionEventPipeline:
         except Exception:
             logger.exception("Camera %s: could not record face results", self.camera_id)
 
-    def _render(self, frame: np.ndarray) -> np.ndarray:
-        """The frame to show live. Overlays (restricted zones, people, faces)
-        are drawn on a copy from the latest results every frame, so they stay
-        steady between the few frames that actually run the models."""
+    def render(self, frame: np.ndarray) -> np.ndarray:
+        """The frame to show live: the same array, or an annotated copy while
+        people are in view / zones are drawn. Overlays are drawn from the
+        latest results on every frame, so they stay steady between the few
+        frames that actually run the models. Never modifies `frame`."""
         with self._live_lock:
             detections, faces = list(self._live_detections), list(self._live_faces)
+            fire_at, fire_found = self._live_fire
         show_people = self._person_present and bool(detections or faces)
+        show_fire = bool(fire_found) and time.monotonic() - fire_at <= VISIBLE_SECONDS
         zones = self._zones
         enhance_view = self._night and settings.night.enhance_live_view
-        if not (show_people or zones or enhance_view):
+        if not (show_people or show_fire or zones or enhance_view):
             return frame
         try:
-            display = self._enhancer.apply(frame) if enhance_view else frame.copy()
+            display = self._view_enhancer.apply(frame) if enhance_view else frame.copy()
             if zones:
                 draw_zones(display, zones, self._occupied_zones)
             if show_people:
                 self._draw_detections(display, detections)
                 draw_faces(display, faces)
+            if show_fire:
+                draw_fire_boxes(display, fire_found)
             return display
         except Exception:
             # Overlays are cosmetic: never let a drawing problem stop the feed.
@@ -373,6 +447,7 @@ class MotionEventPipeline:
         self._continue_next = continuing
         self._person_present = False
         self._occupied_zones = set()
+        self._activity.clear_live()
         with self._live_lock:
             self._live_detections = []
             self._live_faces = []
@@ -381,3 +456,8 @@ class MotionEventPipeline:
         """Called when the camera worker stops (app shutdown or camera loss)."""
         if self._writer is not None:
             self._finalize(status="interrupted")
+        self._activity.interrupt()  # no zone/crowd timer may run across the gap
+        if self._fire is not None:
+            self._fire.interrupt()
+        with self._live_lock:
+            self._live_fire = (float("-inf"), [])

@@ -19,4 +19,14 @@ def build_recording_path(camera_id: str, started_at: datetime) -> Path:
 
 
 def resolve_recording_path(relative_path: str) -> Path:
-    return settings.storage_dir / relative_path
+    return inside_storage(relative_path)
+
+
+def inside_storage(relative_path: str) -> Path:
+    """`relative_path` under the storage folder. Paths come from the database, never from a request, so this is
+    defence in depth: a corrupted or tampered row can still not point a download at some other file."""
+    root = settings.storage_dir.resolve()
+    full = (root / relative_path).resolve()
+    if not full.is_relative_to(root):
+        raise ValueError("Stored path points outside the storage folder")
+    return full
