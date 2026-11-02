@@ -1,3 +1,4 @@
+import io
 import logging
 import sqlite3
 
@@ -5,6 +6,7 @@ import cv2
 import numpy as np
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
+from PIL import Image
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import SQLAlchemyError
@@ -172,6 +174,15 @@ def _enroll_image(service: FaceService, session, person_id: int, image: np.ndarr
     return {"sample_id": sample.id}
 
 
+def _pixel_count(data: bytes) -> int | None:
+    """Width x height from the file header alone (nothing is decoded), or None if it is not a readable image."""
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            return image.width * image.height
+    except Exception:  # noqa: BLE001 - any unreadable file is reported by the normal decode below
+        return None
+
+
 def _process_uploads(service: FaceService, person_id: int, uploads: list[tuple[str | None, bytes]]) -> dict:
     cfg = settings.face
     results = []
@@ -180,6 +191,9 @@ def _process_uploads(service: FaceService, person_id: int, uploads: list[tuple[s
         try:
             if len(data) > cfg.enroll_max_image_bytes:
                 raise EnrollError(f"Photo is larger than {cfg.enroll_max_image_bytes // (1024 * 1024)} MB")
+            pixels = _pixel_count(data)
+            if pixels is not None and pixels > cfg.enroll_max_image_pixels:
+                raise EnrollError(f"Photo is {pixels / 1e6:.0f} megapixels; the limit is {cfg.enroll_max_image_pixels / 1e6:.0f}. Use a smaller photo")
             image = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
             if image is None:
                 raise EnrollError("Not a readable image (use JPEG or PNG)")

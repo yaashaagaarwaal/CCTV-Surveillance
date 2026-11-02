@@ -44,7 +44,7 @@ def login(body: LoginBody, request: Request, response: Response):
 
     wait = login_throttle.retry_after(ip, username)
     if wait:
-        logger.warning("Login throttled for %r from %s", username, ip)
+        logger.warning("Login throttled for a username from %s", ip)  # the name is not logged: it may be a mistyped password
         raise HTTPException(status_code=429, detail=f"Too many failed attempts. Try again in {wait} s.", headers={"Retry-After": str(wait)})
 
     with SessionLocal() as db:
@@ -53,7 +53,8 @@ def login(body: LoginBody, request: Request, response: Response):
         valid = verify_password(body.password, user.password_hash if user else DUMMY_HASH)
         if not (user and valid and not user.disabled):
             login_throttle.failed(ip, username)
-            logger.warning("Failed login for %r from %s", username, ip)
+            # A name that matches no account is not logged: people often type their password into the username box.
+            logger.warning("Failed login for %s from %s", repr(username) if user else "an unknown username", ip)
             raise HTTPException(status_code=401, detail="Invalid username or password")
         user.last_login_at = datetime.now(timezone.utc)
         db.commit()

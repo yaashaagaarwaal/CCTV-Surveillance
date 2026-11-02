@@ -34,15 +34,15 @@ def iso_utc(value: datetime | None) -> str | None:
 
 def _faces_summary(session, event_ids: list[int]) -> dict[int, dict]:
     """Who was recognized in each event: known names plus unknown/not-sure counts."""
-    summary = {i: {"people": [], "unknown_faces": 0, "uncertain_faces": 0} for i in event_ids}
+    summary = {i: {"people": [], "unknown_faces": 0, "uncertain_faces": 0, "uncertain_reasons": []} for i in event_ids}
     if not event_ids:
         return summary
     rows = session.execute(
-        select(FaceObservation.event_id, FaceObservation.label, Person.name)
+        select(FaceObservation.event_id, FaceObservation.label, Person.name, FaceObservation.reason)
         .join(Person, Person.id == FaceObservation.person_id, isouter=True)
         .where(FaceObservation.event_id.in_(event_ids))
     ).all()
-    for event_id, label, name in rows:
+    for event_id, label, name, reason in rows:
         entry = summary[event_id]
         if label == "known":
             name = name or "Deleted person"  # their registration was removed later
@@ -52,10 +52,12 @@ def _faces_summary(session, event_ids: list[int]) -> dict[int, dict]:
             entry["unknown_faces"] += 1
         elif label == "uncertain":
             entry["uncertain_faces"] += 1
+            if reason and reason not in entry["uncertain_reasons"] and len(entry["uncertain_reasons"]) < 3:
+                entry["uncertain_reasons"].append(reason)  # e.g. "face turned away: yaw 0.62 (max 0.40)"
     return summary
 
 
-RULE_ALERT_TYPES = ("restricted_area", "suspicious_activity")
+RULE_ALERT_TYPES = ("restricted_area", "suspicious_activity", "fire", "smoke")
 
 
 def _reasons_summary(session, event_ids: list[int]) -> dict[int, list[dict]]:
@@ -92,7 +94,7 @@ def _serialize(event: Event, faces: dict | None = None, reasons: list[dict] | No
         "size_bytes": size_bytes,
         "max_confidence": event.max_confidence,
         "reasons": reasons or [],
-        **(faces or {"people": [], "unknown_faces": 0, "uncertain_faces": 0}),
+        **(faces or {"people": [], "unknown_faces": 0, "uncertain_faces": 0, "uncertain_reasons": []}),
     }
 
 

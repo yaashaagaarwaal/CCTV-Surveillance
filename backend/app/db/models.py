@@ -122,6 +122,7 @@ class FaceObservation(Base):
     similarity: Mapped[float | None] = mapped_column(Float, nullable=True)
     detection_score: Mapped[float] = mapped_column(Float)
     snapshot_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    reason: Mapped[str | None] = mapped_column(String, nullable=True)  # why a face was "uncertain", with the measured numbers
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
 
 
@@ -137,7 +138,7 @@ class Alert(Base):
     __tablename__ = "alerts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    # unknown_person | restricted_area | suspicious_activity | camera_offline
+    # unknown_person | restricted_area | suspicious_activity | camera_offline | fire | smoke
     type: Mapped[str] = mapped_column(String, index=True)
     # low | medium | high | critical
     severity: Mapped[str] = mapped_column(String, index=True)
@@ -192,6 +193,11 @@ class CameraRules(Base):
     quiet_start: Mapped[str | None] = mapped_column(String, nullable=True)
     quiet_end: Mapped[str | None] = mapped_column(String, nullable=True)
     fall_detection: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Crowd rule: alert when at least `crowd_threshold` people stay in view (or inside zone
+    # `crowd_zone_id`) for `crowd_seconds`. 0 = off. The count is a lower bound (see activity/crowd.py).
+    crowd_threshold: Mapped[int] = mapped_column(Integer, default=0)
+    crowd_seconds: Mapped[int] = mapped_column(Integer, default=10)
+    crowd_zone_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class User(Base):

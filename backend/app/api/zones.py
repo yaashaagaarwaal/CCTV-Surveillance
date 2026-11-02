@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
-from app.db.models import Camera, Zone
+from app.db.models import Camera, CameraRules, Zone
 from app.db.session import SessionLocal
 from app.security.deps import current_user, require_admin
 from app.services.activity.zones import HHMM
@@ -143,6 +143,12 @@ def delete_zone(zone_id: int):
             raise HTTPException(status_code=404, detail="Zone not found")
         camera_id = zone.camera_id
         db.delete(zone)
+        rules = db.get(CameraRules, camera_id)
+        crowd_rule_changed = rules is not None and rules.crowd_zone_id == zone_id
+        if crowd_rule_changed:
+            rules.crowd_zone_id = None  # its crowd rule falls back to the whole picture
         db.commit()
     camera_manager.reload_zones(camera_id)
+    if crowd_rule_changed:
+        camera_manager.reload_rules(camera_id)
     return Response(status_code=204)

@@ -21,7 +21,7 @@ router = APIRouter(prefix="/cameras", tags=["cameras"], dependencies=[Depends(cu
 CameraType = Literal["webcam", "rtsp", "http", "file"]
 
 # Pause between stream polls so an idle/slow stream doesn't spin the loop.
-STREAM_POLL_INTERVAL = 0.03
+STREAM_POLL_INTERVAL = 0.01
 
 
 class CameraCreate(BaseModel):

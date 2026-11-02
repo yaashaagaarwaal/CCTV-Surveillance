@@ -3,7 +3,9 @@ import secrets
 
 from sqlalchemy import func, select
 
-from app.core.config import settings
+from pathlib import Path
+
+from app.core.config import BASE_DIR, settings
 from app.db.models import User
 from app.db.session import SessionLocal
 from app.security.passwords import hash_password, password_problems
@@ -46,7 +48,18 @@ def config_problems() -> list[str]:
     return problems
 
 
+def env_file_warning(path: Path | None = None) -> str | None:
+    """A warning if the .env file (admin password, secret key, SMTP password) can be read by other users of this computer."""
+    path = path or BASE_DIR / ".env"
+    if path.is_file() and path.stat().st_mode & 0o077:
+        return f"{path.name} can be read by other users of this computer; restrict it with:  chmod 600 {path}"
+    return None
+
+
 def validate_security_config() -> None:
+    warning = env_file_warning()
+    if warning:
+        logger.warning(warning)
     problems = config_problems()
     if problems:
         message = "Refusing to start — unsafe configuration:\n  - " + "\n  - ".join(problems)
