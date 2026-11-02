@@ -28,6 +28,14 @@ _ADDED_COLUMNS = {
         "resolved_at": "DATETIME",
         "resolved_by": "VARCHAR",
     },
+    "camera_rules": {
+        "crowd_threshold": "INTEGER DEFAULT 0",
+        "crowd_seconds": "INTEGER DEFAULT 10",
+        "crowd_zone_id": "INTEGER",
+    },
+    "face_observations": {
+        "reason": "VARCHAR",
+    },
     "zones": {
         "loiter_seconds": "INTEGER DEFAULT 30",
         "repeat_entries": "INTEGER DEFAULT 3",

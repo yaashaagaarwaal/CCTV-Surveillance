@@ -56,6 +56,39 @@ class DetectionConfig(BaseModel):
     # the expensive model never runs at all while the scene is idle, and
     # even during a recording it isn't run on every single frame.
     run_every_n_frames: int = 5
+    # Input size for a camera that has a crowd limit set. 320 loses people once they stand close together (measured:
+    # four people in a row counted as three, eight as five), 640 finds them (scripts/crowd_benchmark.py) for about
+    # +6 ms per pass. Cameras without a crowd limit keep the fast `imgsz`.
+    crowd_imgsz: int = 640
+
+
+class FireConfig(BaseModel):
+    """Fire and smoke detection (a second YOLOv8n, fine-tuned on the D-Fire dataset; see README "Fire and smoke detection").
+
+    It runs on the camera's analysis thread, never the capture thread, and does not wait for motion or a recording:
+    smoke drifts slowly and a fire can start in a still room. One pass per `interval_seconds` per camera keeps the cost low.
+    Fire and smoke are judged separately. A detection counts only after it has been seen `confirm_hits` times within
+    `confirm_window_seconds` (one flickering frame never alerts), and an alert is raised once per episode, with a cooldown.
+    A model like this has false alarms (red lamps, sunsets, steam, fog, a phone screen), so the defaults are on the careful side
+    for smoke, which is the easier one to confuse. Tune them on your own cameras.
+    """
+
+    enabled: bool = True
+    # No weights are downloaded automatically: if the file is missing the feature switches itself off (logged once).
+    model_path: Path = BASE_DIR / "models" / "fire_smoke_yolov8n.pt"
+    imgsz: int = 640  # the size the model was trained at
+    interval_seconds: float = 1.0
+    # Per-class minimum model confidence (0-1).
+    fire_confidence: float = 0.50
+    smoke_confidence: float = 0.60
+    # Confirmation: this many detections inside the window, per class.
+    fire_confirm_hits: int = 3
+    smoke_confirm_hits: int = 5
+    confirm_window_seconds: float = 8.0
+    # An episode ends after this long without a detection; a new alert for the same camera and class also waits for the cooldown.
+    clear_seconds: float = 10.0
+    fire_alert_cooldown_seconds: float = 120.0
+    smoke_alert_cooldown_seconds: float = 180.0
 
 
 class FaceConfig(BaseModel):
@@ -112,6 +145,8 @@ class FaceConfig(BaseModel):
     enroll_min_detection_score: float = 0.85
     enroll_max_images_per_request: int = 10
     enroll_max_image_bytes: int = 8 * 1024 * 1024
+    # A small, highly compressed file can declare gigapixels and need gigabytes to decode; refuse before decoding.
+    enroll_max_image_pixels: int = 40_000_000
 
 
 class NightConfig(BaseModel):
@@ -173,6 +208,13 @@ class ActivityConfig(BaseModel):
     zone_confirmations: int = 2
     zone_alert_cooldown_seconds: float = 120.0
     zone_exit_seconds: float = 4.0
+
+    # Crowd rule (the limit and duration are per camera, set in the dashboard; off until a limit is set).
+    # A dip below the limit shorter than the grace does not restart the timer (detectors flicker);
+    # one alert per crowded episode, and at most one per cooldown.
+    crowd_severity: str = "medium"
+    crowd_grace_seconds: float = 3.0
+    crowd_alert_cooldown_seconds: float = 300.0
 
     # Fall-like posture change (off per camera until enabled in the dashboard).
     # Uses only the person's bounding box: upright (tall) -> lying (wide) quickly,
@@ -250,7 +292,17 @@ class Settings(BaseSettings):
     recordings_dir_name: str = "recordings"
     faces_dir_name: str = "faces"
     snapshots_dir_name: str = "snapshots"
+    # How often the AI (motion, YOLO, faces, rules) looks at the newest frame, and the
+    # playback rate of video-file cameras. The live picture itself is NOT limited by this:
+    # it follows the camera's own frame rate.
     capture_fps: int = 20
+    # Mode requested from a local webcam. Bigger is not better here: every pixel costs time in
+    # motion detection, YOLO, face recognition and JPEG encoding, and 720p is plenty for people
+    # at room distance. Many laptop cameras default to 1080p, which roughly doubles the work.
+    # Use 0 to keep the camera's own default. Drivers may choose the nearest mode they support.
+    webcam_width: int = 1280
+    webcam_height: int = 720
+    webcam_fps: int = 30
     # --- Access control & remote monitoring (see docs: "Remote monitoring") ---
     # Secrets come from the environment / .env, never from code.
     # Comma-separated lists work, e.g. CORS_ORIGINS=https://cctv.example.com,http://localhost:5173
@@ -284,6 +336,7 @@ class Settings(BaseSettings):
     motion: MotionConfig = MotionConfig()
     detection: DetectionConfig = DetectionConfig()
     face: FaceConfig = FaceConfig()
+    fire: FireConfig = FireConfig()
     night: NightConfig = NightConfig()
     activity: ActivityConfig = ActivityConfig()
     alerts: AlertConfig = AlertConfig()

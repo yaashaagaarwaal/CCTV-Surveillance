@@ -19,6 +19,7 @@ from app.services.alert_bus import alert_bus
 from app.services.camera.manager import camera_manager, warmup_camera_permissions
 from app.services.camera.registry import load_enabled_specs, seed_default_camera
 from app.services.detection.detector import load_person_detector
+from app.services.detection.fire import load_fire_detector
 from app.services.faces.runtime import set_face_service
 from app.services.faces.service import load_face_service
 from app.services.notifications.dispatcher import dispatcher
@@ -42,6 +43,7 @@ async def lifespan(app: FastAPI):
     dispatcher.start()
 
     camera_manager.set_person_detector(load_person_detector())
+    camera_manager.set_fire_detector(load_fire_detector())
     face_service = load_face_service(settings.face)
     set_face_service(face_service)
     camera_manager.set_face_service(face_service)
