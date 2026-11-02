@@ -11,6 +11,7 @@ import numpy as np
 from app.core.config import ActivityConfig
 from app.db.models import Event
 from app.db.session import SessionLocal
+from app.services.activity.crowd import CrowdCount, CrowdTimer, count_people
 from app.services.activity.posture import PostureState
 from app.services.activity.rules import RulesSpec
 from app.services.activity.zones import ZoneSpec, draw_zones, in_window
@@ -22,6 +23,7 @@ from app.services.recording.event_types import upgrade_event_type
 logger = logging.getLogger(__name__)
 
 TRACK_TIMEOUT_SECONDS = 4.0
+CROWD_SMOOTHING_CYCLES = 5  # the crowd count is the median of this many detection cycles (about 1 s)
 CONFIDENCE_NOTE = "person detector confidence"
 
 
@@ -112,6 +114,8 @@ class ActivityMonitor:
       * repeated entry      a zone is entered `repeat_entries` times within
                             `repeat_window_seconds` (leaving = empty for `zone_exit_seconds`);
       * security hours      a person is seen during the camera's configured hours;
+      * crowd               at least `crowd_threshold` people in view (or in one zone) for
+                            `crowd_seconds` (see crowd.py: a lower bound, never an exact count);
       * fall-like           see posture.py (off unless enabled for the camera);
       * lingering in view   one person in view for a long time anywhere (optional).
     Each rule has a cooldown so a lingering person doesn't flood the alert list.
@@ -125,6 +129,11 @@ class ActivityMonitor:
         self._tracker = PersonTracker()
         self._zone_state: dict[int, ZoneState] = {}
         self._last_alert: dict[tuple, float] = {}
+        self._crowd_timer = CrowdTimer()
+        self._crowd = CrowdCount(0, False, None)
+        self._recent_counts: deque = deque(maxlen=CROWD_SMOOTHING_CYCLES)
+        self._crowd_elapsed = 0.0
+        self._occupied: set[int] = set()
 
     def set_zones(self, zones: list[ZoneSpec]) -> None:
         self.zones = zones
@@ -132,6 +141,49 @@ class ActivityMonitor:
 
     def set_rules(self, rules: RulesSpec) -> None:
         self.rules = rules
+        self._crowd_timer.reset()  # a changed limit or region starts a fresh count
+
+    def interrupt(self) -> None:
+        """The camera dropped out (or is stopping). Nothing is known about the gap, so visits in
+        progress are ended and the tracker and crowd timer are cleared: no timer may run across an
+        outage, and a person still there afterwards starts a fresh visit. Entries already counted
+        towards "repeated entry" and the alert cooldowns are kept."""
+        inside = [z.name for z in self.zones if self._zone_state.get(z.id, ZoneState()).inside]
+        for zone_id, state in list(self._zone_state.items()):
+            self._zone_state[zone_id] = ZoneState(entries=state.entries)
+        self._tracker = PersonTracker()
+        self._crowd_timer.reset()
+        self.clear_live()
+        if inside:
+            logger.info("Camera %s interrupted: visit ended in zone(s) %s; a person still there starts a new visit", self.camera_id, ", ".join(inside))
+
+    def clear_live(self) -> None:
+        """Nobody is being watched right now (recording ended, camera gone): live readouts go to zero."""
+        self._occupied = set()
+        self._recent_counts.clear()
+        self._crowd = CrowdCount(0, False, self._crowd.region)
+        self._crowd_elapsed = 0.0
+
+    def status(self, wall: datetime | None = None) -> dict:
+        """What this camera is monitoring and how it stands, for the dashboard tile."""
+        wall, rules, cfg = datetime.now() if wall is None else wall, self.rules, self.config
+        crowd = self._crowd
+        return {
+            "zones": [{"id": z.id, "name": z.name, "active": z.is_active(wall), "occupied": z.id in self._occupied} for z in list(self.zones)],
+            "security_hours": (
+                {"start": rules.quiet_start, "end": rules.quiet_end, "active_now": in_window(wall.time(), rules.quiet_start, rules.quiet_end)}
+                if rules.has_quiet_hours else None
+            ),
+            "crowd": {
+                **crowd.as_dict(),
+                "threshold": rules.crowd_threshold,
+                "seconds": rules.crowd_seconds,
+                "over": rules.crowd_threshold > 0 and crowd.count >= rules.crowd_threshold,
+                "over_seconds": int(self._crowd_elapsed),
+            },
+            "fall_check": rules.fall_enabled,
+            "lingering": cfg.lingering_enabled,
+        }
 
     def _cooldown_ok(self, key: tuple, seconds: float, now: float) -> bool:
         last = self._last_alert.get(key)
@@ -154,6 +206,8 @@ class ActivityMonitor:
         height, width = frame.shape[:2]
         tracks = self._tracker.update(detections, now)
         occupied = self._check_zones(detections, frame, event_id, now, wall, width, height)
+        self._occupied = occupied
+        self._check_crowd(detections, frame, event_id, now, width, height)
 
         if cfg.lingering_enabled:
             for track in tracks:
@@ -179,6 +233,39 @@ class ActivityMonitor:
         if self.rules.fall_enabled:
             self._check_falls(tracks, frame, detections, event_id, now, height)
         return occupied
+
+    def _check_crowd(self, detections, frame, event_id, now, width, height) -> None:
+        rules, cfg = self.rules, self.config
+        zone = next((z for z in self.zones if z.id == rules.crowd_zone_id), None) if rules.crowd_zone_id is not None else None
+        now_count = count_people(detections, zone, width, height)
+        # A detector flickers by a person in either direction for a cycle or two (missed, or one person drawn as
+        # two). The count that is shown and tested against the limit is the median of the last few cycles, so a
+        # one-cycle spike can neither start nor keep alive a "crowd", while a group that is really there still counts.
+        self._recent_counts.append(now_count)
+        counts = sorted(c.count for c in self._recent_counts)
+        self._crowd = crowd = CrowdCount(counts[(len(counts) - 1) // 2], any(c.approximate for c in self._recent_counts), now_count.region)
+        timer = self._crowd_timer
+        if rules.crowd_threshold <= 0:
+            timer.reset()
+            self._crowd_elapsed = 0.0
+            return
+        over = crowd.count >= rules.crowd_threshold
+        self._crowd_elapsed = elapsed = timer.update(over, now, cfg.crowd_grace_seconds)
+        if over and not timer.alerted and elapsed >= rules.crowd_seconds:
+            timer.alerted = True  # one alert per crowded episode, whatever the cooldown
+            if self._cooldown_ok(("crowd",), cfg.crowd_alert_cooldown_seconds, now):
+                where = f" inside zone '{zone.name}'" if zone else " in view"
+                self._raise(
+                    "suspicious_activity", cfg.crowd_severity, "crowd",
+                    f"At least {crowd.count} people{where} for {duration_text(elapsed)} "
+                    f"(alert at {rules.crowd_threshold} for {duration_text(rules.crowd_seconds)})",
+                    {
+                        "people": crowd.count, "approximate": crowd.approximate, "region": crowd.region or "whole picture",
+                        "threshold_people": rules.crowd_threshold, "seconds_over": int(elapsed), "threshold_seconds": rules.crowd_seconds,
+                        "note": "Counted with a standard person detector. People who overlap or stand in front of each other are missed, so the real number can be higher.",
+                    },
+                    frame, detections, event_id, [d.confidence for d in detections],
+                )
 
     def _check_falls(self, tracks, frame, detections, event_id, now, frame_height) -> None:
         cfg = self.config

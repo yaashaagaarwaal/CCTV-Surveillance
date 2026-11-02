@@ -7,11 +7,14 @@ from app.db.session import SessionLocal
 
 @dataclass(frozen=True)
 class RulesSpec:
-    """A camera's security hours and fall-detection switch."""
+    """A camera's security hours, fall-detection switch and crowd limit."""
 
     quiet_start: str | None = None
     quiet_end: str | None = None
     fall_enabled: bool = False
+    crowd_threshold: int = 0  # people; 0 = rule off
+    crowd_seconds: int = 10  # how long the count must stay at or above the threshold
+    crowd_zone_id: int | None = None  # count only people standing in this zone (None = whole picture)
 
     @property
     def has_quiet_hours(self) -> bool:
@@ -31,4 +34,7 @@ def load_rules(camera_id: str) -> RulesSpec:
         row = db.get(CameraRules, camera_id)
         if row is None:
             return default_rules()
-        return RulesSpec(row.quiet_start, row.quiet_end, bool(row.fall_detection))
+        return RulesSpec(
+            row.quiet_start, row.quiet_end, bool(row.fall_detection),
+            row.crowd_threshold or 0, row.crowd_seconds or 10, row.crowd_zone_id,
+        )

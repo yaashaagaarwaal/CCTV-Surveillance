@@ -33,7 +33,7 @@ def draw_faces(frame: np.ndarray, faces: list[FaceResult]) -> None:
         elif face.label == LABEL_UNKNOWN:
             text = "UNKNOWN"
         else:
-            text = "NOT SURE"
+            text = f"NOT SURE: {face.reason}" if face.reason else "NOT SURE"
         (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
         top = min(y + h + th + 8, frame.shape[0] - 2)
         cv2.rectangle(frame, (x, top - th - 6), (x + tw + 6, top + 2), color, -1)
@@ -75,7 +75,7 @@ class FaceEventTracker:
             if face.label == LABEL_KNOWN:
                 self._log_observation(f"known:{face.person_id}", face, event_id, now)
             elif face.label == LABEL_UNCERTAIN:
-                self._log_observation("uncertain", face, event_id, now)
+                self._log_observation(f"uncertain:{face.reason}", face, event_id, now)  # one per distinct reason
             elif people_registered > 0:
                 # With nobody registered there is nothing to be "unknown"
                 # relative to, so no unknown events/alerts are created.
@@ -85,7 +85,7 @@ class FaceEventTracker:
             self._unknown_cycles += 1
             needed = max(self.config.unknown_confirmations, settings.night.unknown_confirmations) if night else self.config.unknown_confirmations
             if self._unknown_cycles >= needed:
-                self._confirm_unknown(unknown_faces, frame, event_id, now)
+                self._confirm_unknown(unknown_faces, frame, event_id, now, needed)
 
     def _log_observation(self, key: str, face: FaceResult, event_id: int | None, now: float) -> None:
         last = self._last_logged.get(key)
@@ -101,15 +101,17 @@ class FaceEventTracker:
                     label=face.label,
                     similarity=face.similarity,
                     detection_score=face.score,
+                    reason=(face.detail or face.reason) if face.label == LABEL_UNCERTAIN else None,
                     timestamp=datetime.now(timezone.utc),
                 )
             )
             session.commit()
-        logger.info(
-            "Camera %s: face %s%s", self.camera_id, face.label, f" ({face.name}, {face.similarity:.2f})" if face.name else ""
-        )
+        detail = f" ({face.name}, {face.similarity:.2f})" if face.name else ""
+        if face.label == LABEL_UNCERTAIN:  # not called known or unknown: say which quality check or threshold held it back
+            detail = f" ({face.detail or face.reason}; similarity {face.similarity:.2f})" if face.similarity is not None else f" ({face.detail or face.reason})"
+        logger.info("Camera %s: face %s%s", self.camera_id, face.label, detail)
 
-    def _confirm_unknown(self, unknown_faces: list[FaceResult], frame: np.ndarray, event_id: int | None, now: float) -> None:
+    def _confirm_unknown(self, unknown_faces: list[FaceResult], frame: np.ndarray, event_id: int | None, now: float, needed: int) -> None:
         self._unknown_confirmed = True
         best = max(unknown_faces, key=lambda f: f.score)
         when = datetime.now(timezone.utc)
@@ -142,6 +144,23 @@ class FaceEventTracker:
                     upgrade_event_type(event, "unknown_person")
             session.commit()
 
+        similarity = None if best.similarity is None else round(best.similarity, 2)
+        cfg = self.config
+        explanation = (
+            f"A face was judged unknown in {self._unknown_cycles} separate checks of one recording (the rule needs {needed})."
+            f" Best match to anyone registered: {'none' if similarity is None else f'{similarity:.2f}'};"
+            f" below {cfg.unknown_threshold:.2f} means a different person, {cfg.known_threshold:.2f} or more is a match."
+            f" The face was clear enough to judge: at least {cfg.min_face_px} px wide, bright enough and facing the camera."
+        )
+        details = {
+            "rule": "unknown_person",
+            "confirmations": self._unknown_cycles,
+            "similarity": similarity,
+            "face_score": round(best.score, 2),
+            "face_px": min(best.bbox[2], best.bbox[3]),
+            "explanation": explanation,
+        }
+
         cooldown = self.config.alert_cooldown_seconds
         if self._last_alert_at is not None and now - self._last_alert_at < cooldown:
             logger.info("Camera %s: unknown person recorded; alert suppressed (cooldown)", self.camera_id)
@@ -154,4 +173,5 @@ class FaceEventTracker:
             message="Unknown person detected",
             event_id=event_id,
             snapshot_path=snapshot_rel,
+            details=details,
         )

@@ -55,7 +55,8 @@ class FaceResult:
     person_id: int | None = None
     name: str | None = None
     similarity: float | None = None  # best cosine similarity to anyone registered
-    reason: str | None = None  # why it is "uncertain"
+    reason: str | None = None  # why it is "uncertain" (short, for labels)
+    detail: str | None = None  # the same decision with the measured numbers and limits (for logs, the database, alerts)
 
 
 @dataclass
@@ -213,16 +214,24 @@ class FaceService:
             return FaceResult(label=LABEL_KNOWN, person_id=match[0], name=match[1], **base)
 
         # Not a confident match. Only call it "unknown" when the face is good
-        # enough that a poor score really means "someone else".
+        # enough that a poor score really means "someone else". Each refusal
+        # records what was measured against which limit, so it can be acted on.
+        size, yaw = min(box.w, box.h), box.yaw_ratio
         if brightness < cfg.min_face_brightness:
-            return FaceResult(label=LABEL_UNCERTAIN, reason="too dark to judge", **base)
-        if min(box.w, box.h) < cfg.min_face_px:
-            return FaceResult(label=LABEL_UNCERTAIN, reason="face too small", **base)
-        if box.yaw_ratio > cfg.max_yaw_ratio:
-            return FaceResult(label=LABEL_UNCERTAIN, reason="face turned away", **base)
+            detail = f"too dark to judge: brightness {brightness:.0f} (needs {cfg.min_face_brightness:.0f})"
+            return FaceResult(label=LABEL_UNCERTAIN, reason="too dark to judge", detail=detail, **base)
+        if size < cfg.min_face_px:
+            detail = f"face too small: {size} px (needs {cfg.min_face_px})"
+            return FaceResult(label=LABEL_UNCERTAIN, reason="face too small", detail=detail, **base)
+        if yaw > cfg.max_yaw_ratio:
+            detail = f"face turned away: yaw {yaw:.2f} (max {cfg.max_yaw_ratio:.2f})"
+            return FaceResult(label=LABEL_UNCERTAIN, reason="face turned away", detail=detail, **base)
         if match is None or similarity < cfg.unknown_threshold:
-            return FaceResult(label=LABEL_UNKNOWN, **base)
-        return FaceResult(label=LABEL_UNCERTAIN, reason="similarity between thresholds", **base)
+            shown = "no one is registered to compare with" if similarity is None else f"similarity {similarity:.2f} is below the unknown limit {cfg.unknown_threshold:.2f}"
+            detail = f"{shown} (face {size} px, brightness {brightness:.0f}, yaw {yaw:.2f}: clear enough to judge)"
+            return FaceResult(label=LABEL_UNKNOWN, detail=detail, **base)
+        detail = f"similarity {similarity:.2f} is between the unknown limit {cfg.unknown_threshold:.2f} and the known limit {cfg.known_threshold:.2f}"
+        return FaceResult(label=LABEL_UNCERTAIN, reason="similarity between thresholds", detail=detail, **base)
 
     # ---- registration ------------------------------------------------------
 

@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 
 PERSON_CLASS_ID = 0  # COCO class index for "person"
 
+# Every torch model (people, fire/smoke) runs under this one lock, so two cameras (or two models) never use MPS at the same time.
+INFERENCE_LOCK = threading.Lock()
+
 
 @dataclass
 class Detection:
@@ -38,7 +41,7 @@ class PersonDetector:
     def __init__(self, config: DetectionConfig):
         self._confidence_threshold = config.confidence_threshold
         self._imgsz = config.imgsz
-        self._lock = threading.Lock()
+        self._lock = INFERENCE_LOCK
         self._device = "mps" if torch.backends.mps.is_available() else "cpu"
 
         config.model_path.parent.mkdir(parents=True, exist_ok=True)
@@ -54,14 +57,15 @@ class PersonDetector:
             time.monotonic() - t0,
         )
 
-    def detect(self, frame: np.ndarray, confidence: float | None = None) -> list[Detection]:
-        """`confidence` overrides the configured threshold for this call (used at night)."""
+    def detect(self, frame: np.ndarray, confidence: float | None = None, imgsz: int | None = None) -> list[Detection]:
+        """`confidence` overrides the configured threshold for this call (used at night); `imgsz` the input size
+        (used on cameras that count crowds: larger input finds people who stand close together)."""
         with self._lock:
             results = self._model.predict(
                 frame,
                 classes=[PERSON_CLASS_ID],
                 conf=self._confidence_threshold if confidence is None else confidence,
-                imgsz=self._imgsz,
+                imgsz=imgsz or self._imgsz,
                 device=self._device,
                 verbose=False,
             )

@@ -41,4 +41,6 @@ def new_snapshot_path(camera_id: str, when: datetime, prefix: str = "unknown") -
 
 
 def resolve(relative: str) -> Path:
-    return settings.storage_dir / relative
+    from app.services.recording.paths import inside_storage
+
+    return inside_storage(relative)
