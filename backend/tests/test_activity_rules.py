@@ -327,6 +327,63 @@ def test_zone_reload_keeps_working():
     assert fresh_alerts() == []
 
 
+def test_camera_interruption_does_not_extend_a_visit():
+    """An outage shorter than the exit gap used to be bridged silently, so a visit and its loiter timer
+    would run straight across it. interrupt() (called when the camera drops) ends the visit instead."""
+    c = Clock(monitor([zone(repeat_entries=0)]))
+    c.run(6, [INSIDE])
+    assert rules_of(fresh_alerts()) == ["zone_intrusion"]
+    c.m.interrupt()
+    c.skip(3)  # a 3 s outage: shorter than zone_exit_seconds (4 s)
+    c.run(6, [INSIDE])
+    assert "loitering" not in rules_of(fresh_alerts()), "6 s + gap + 6 s must not add up to a 10 s loiter"
+    c.run(6, [INSIDE])
+    assert rules_of(fresh_alerts()) == ["loitering"], "the new visit's own timer still reaches the limit"
+
+
+def test_interruption_keeps_the_entries_already_counted():
+    c = Clock(monitor([zone(loiter_seconds=0, repeat_entries=2, repeat_window_seconds=300)]))
+    c.run(3, [INSIDE])
+    assert rules_of(fresh_alerts()) == ["zone_intrusion"]
+    c.m.interrupt()
+    c.skip(2)
+    c.run(3, [INSIDE])
+    assert "repeated_entry" in rules_of(fresh_alerts()), "the outage must not silently forget the first entry"
+
+
+def test_long_tracking_loss_is_a_new_visit_not_a_longer_one():
+    """The detector loses someone for longer than the exit gap: their time so far is not carried over."""
+    c = Clock(monitor([zone(repeat_entries=0)]))
+    c.run(6, [INSIDE])
+    fresh_alerts()
+    c.run(5, [])  # 5 s with nobody detected (longer than the 4 s exit gap)
+    c.run(6, [INSIDE])
+    assert "loitering" not in rules_of(fresh_alerts()), "6 s + 5 s gap + 6 s is two short visits, not one 17 s visit"
+
+
+def test_reentry_respects_the_default_cooldown():
+    c = Clock(monitor([zone(loiter_seconds=0, repeat_entries=0)], zone_alert_cooldown_seconds=120.0))
+    c.run(3, [INSIDE])
+    assert rules_of(fresh_alerts()) == ["zone_intrusion"]
+    c.run(8, [OUTSIDE])
+    c.run(3, [INSIDE])
+    assert fresh_alerts() == [], "a re-entry inside the cooldown is the same incident: no second alert"
+    c.run(8, [OUTSIDE])
+    c.skip(120)
+    c.run(3, [INSIDE])
+    assert rules_of(fresh_alerts()) == ["zone_intrusion"], "after the cooldown a new entry alerts again"
+
+
+def test_second_person_joining_is_not_a_new_entry():
+    """Known limit, pinned so it is not mistaken for a bug: a zone is 'occupied' or not, per zone, not per person."""
+    c = Clock(monitor([zone(loiter_seconds=0, repeat_entries=0)]))
+    c.run(3, [INSIDE])
+    assert rules_of(fresh_alerts()) == ["zone_intrusion"]
+    second = Detection((500, 200, 560, 380), 0.9)
+    c.run(5, [INSIDE, second])
+    assert fresh_alerts() == [], "someone else walking into an already occupied zone does not alert again"
+
+
 def main() -> int:
     init_db()
     with SessionLocal() as db:

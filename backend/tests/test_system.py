@@ -5,6 +5,8 @@ verifies every feature through the HTTP API, the way the dashboard uses it.
     python scripts/make_demo_videos.py        # once: creates sample_videos/*
     python -m tests.test_system               # ~4-5 minutes, needs the models downloaded
 
+A looping demo video is also served as a network (HTTP MJPEG) camera to exercise the same
+OpenCV network path an RTSP camera uses: connect, stream, drop, automatic reconnect.
 Nothing in your real database or recordings is touched. Exit code 0 = all passed.
 """
 import json
@@ -15,8 +17,10 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from datetime import datetime, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import requests
@@ -25,6 +29,7 @@ BACKEND = Path(__file__).resolve().parent.parent
 VIDEOS = BACKEND / "sample_videos"
 ADMIN_PASSWORD = "system-test-password-123"
 RESULTS: list[tuple[str, bool, str]] = []
+PASSWORD_CANARY = "typed-my-password-in-the-username-box-81b2"  # must never appear in the server log
 
 
 # ------------------------------------------------------------------ helpers
@@ -53,8 +58,8 @@ def wait_until(fn, timeout: float, every: float = 2.0):
 
 
 class Server:
-    def __init__(self, workdir: Path, port: int):
-        self.dir, self.port, self.proc = workdir, port, None
+    def __init__(self, workdir: Path, port: int, extra_env: dict[str, str] | None = None):
+        self.dir, self.port, self.proc, self.extra_env = workdir, port, None, extra_env or {}
         self.base = f"http://127.0.0.1:{port}"
         self.db_path = workdir / "system.db"
 
@@ -69,6 +74,7 @@ class Server:
             "ALERTS__CAMERA_OFFLINE_GRACE_SECONDS": "5",
             # Test-only: lets the turned-away face in the demo photo be registered (see test_faces).
             "FACE__ENROLL_MAX_YAW_RATIO": "1.0",
+            **self.extra_env,
         }
         log = open(self.dir / "server.log", "ab")
         self.proc = subprocess.Popen(
@@ -119,6 +125,7 @@ def test_authentication(server: Server) -> Client:
         check(f"GET {path} without login -> 401", anon.get(path).status_code == 401)
     check("live stream without login -> 401", anon.get("/cameras/whatever/stream").status_code == 401)
     check("wrong password -> 401", anon.login(password="wrong-password").status_code == 401)
+    check("a password typed into the username box is rejected like any other bad login", anon.login(username=PASSWORD_CANARY, password="x").status_code == 401)
 
     admin = Client(server.base)
     check("admin login", admin.login().status_code == 200)
@@ -269,6 +276,9 @@ def test_faces(admin: Client, ids: dict[str, str]) -> None:
         check("unknown-person alert has a snapshot", admin.get(f"/alerts/{alert['id']}/snapshot").headers.get("content-type") == "image/jpeg")
         check("unknown-person alert links to its recording", alert["event_available"] and admin.get(f"/events/{alert['event_id']}").status_code == 200)
         check("unknown-person event is typed correctly", admin.get(f"/events/{alert['event_id']}").json()["event_type"] == "unknown_person")
+        why = alert.get("details", {})
+        check("unknown-person alert explains itself (rule, confirmations, similarity, explanation)", why.get("rule") == "unknown_person" and why.get("confirmations", 0) >= 3 and why.get("similarity") is not None and "explanation" in why, str(why))
+        check("events API exposes why faces were 'not sure'", "uncertain_reasons" in admin.get(f"/events/{alert['event_id']}").json())
 
     # 2) Now register the man on the right too: he must be recognized BY NAME from then on.
     r = register(admin, "Demo Person", (VIDEOS / "demo_person.jpg").read_bytes(), "demo_person.jpg")
@@ -363,7 +373,7 @@ def test_dashboard(admin: Client) -> None:
     check("live detections are reported", "people_now" in s and "alerts" in s)
 
 
-def test_database_and_restart(server: Server, admin: Client, ids: dict[str, str]) -> None:
+def test_database_and_restart(server: Server, admin: Client, ids: dict[str, str]) -> Client:
     section("Database, clean shutdown and restart recovery")
     events_before = admin.get("/events", params={"limit": 1}).json()["total"]
     took = server.stop()
@@ -388,6 +398,149 @@ def test_database_and_restart(server: Server, admin: Client, ids: dict[str, str]
     r = again.delete(f"/cameras/{ids['night']}")
     check("deleting a camera works", r.status_code == 204)
     check("...and keeps its event history", again.get("/events", params={"camera_id": ids["night"]}).json()["total"] > 0)
+    return again
+
+
+class MjpegServer:
+    """A stand-in network camera: a looping video served as an HTTP MJPEG stream (15 fps)."""
+
+    def __init__(self, port: int):
+        self.port, self.httpd, self._stop = port, None, threading.Event()
+
+    def start(self) -> None:
+        import cv2
+
+        stop = self._stop
+        stop.clear()
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):  # keep test output clean
+                pass
+
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+                self.end_headers()
+                video = cv2.VideoCapture(str(VIDEOS / "demo_street.mp4"))
+                try:
+                    while not stop.is_set():
+                        ok, frame = video.read()
+                        if not ok:
+                            video.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                            continue
+                        _, jpg = cv2.imencode(".jpg", frame)
+                        self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n" % len(jpg) + jpg.tobytes() + b"\r\n")
+                        time.sleep(1 / 15)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                finally:
+                    video.release()
+
+        ThreadingHTTPServer.allow_reuse_address = True
+        ThreadingHTTPServer.daemon_threads = True
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", self.port), Handler)
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def stop(self) -> None:
+        self._stop.set()  # ends the streams already open, so the camera really loses its feed
+        if self.httpd is not None:
+            self.httpd.shutdown()
+            self.httpd.server_close()
+            self.httpd = None
+
+
+def test_crowd_and_monitoring(admin: Client, ids: dict[str, str]) -> None:
+    section("Crowd counting, monitoring status, rule validation (staged clips)")
+    clips = ("demo_crowd.mp4", "demo_empty.mp4")
+    if not all((VIDEOS / name).is_file() for name in clips):
+        check("staged demo clips exist (run scripts/make_demo_videos.py)", False)
+        return
+    crowd = admin.post("/cameras", json={"name": "Crowd Camera", "type": "file", "source": "demo_crowd.mp4"}).json()["id"]
+    empty = admin.post("/cameras", json={"name": "Empty Room", "type": "file", "source": "demo_empty.mp4"}).json()["id"]
+    try:
+        other_zone = admin.get(f"/cameras/{ids['street']}/zones").json()[0]["id"]
+        check("a crowd of one person is rejected", admin.put(f"/cameras/{crowd}/rules", json={"crowd_threshold": 1}).status_code == 422)
+        check("a crowd duration under 3 s is rejected", admin.put(f"/cameras/{crowd}/rules", json={"crowd_threshold": 3, "crowd_seconds": 2}).status_code == 422)
+        check("counting in another camera's zone is rejected", admin.put(f"/cameras/{crowd}/rules", json={"crowd_threshold": 3, "crowd_zone_id": other_zone}).status_code == 422)
+
+        own = admin.post(f"/cameras/{crowd}/zones", json={"name": "Right half", "points": [[0.5, 0], [1, 0], [1, 1], [0.5, 1]], "severity": "high", "loiter_seconds": 0, "repeat_entries": 0}).json()["id"]
+        saved = admin.put(f"/cameras/{crowd}/rules", json={"crowd_threshold": 3, "crowd_seconds": 6, "crowd_zone_id": own}).json()
+        check("crowd rule and region are stored", (saved["crowd_threshold"], saved["crowd_seconds"], saved["crowd_zone_id"]) == (3, 6, own), str(saved))
+        admin.delete(f"/zones/{own}")
+        check("deleting the zone sends its crowd rule back to the whole picture", admin.get(f"/cameras/{crowd}/rules").json()["crowd_zone_id"] is None)
+        admin.put(f"/cameras/{crowd}/rules", json={"crowd_threshold": 3, "crowd_seconds": 6})
+        admin.put(f"/cameras/{empty}/rules", json={"crowd_threshold": 2, "crowd_seconds": 3})
+
+        def crowd_alerts(camera):
+            items = admin.get("/alerts", params={"camera_id": camera, "type": "suspicious_activity", "state": "all", "limit": 50}).json()["items"]
+            return [a for a in items if a["details"].get("rule") == "crowd"]
+
+        found = wait_until(lambda: crowd_alerts(crowd), 120, 3)
+        check("four people staying together raise a crowd alert", bool(found))
+        if found:
+            d = found[0]["details"]
+            check("the crowd alert says 'at least', gives the count and the limits, and warns about under-counting",
+                  3 <= d["people"] <= 4 and d["threshold_people"] == 3 and d["threshold_seconds"] == 6 and found[0]["message"].startswith("At least") and "real number can be higher" in d["note"], str(d))
+        live = admin.get(f"/cameras/{crowd}").json()
+        monitoring = live.get("monitoring") or {}
+        check("the camera status exposes what is monitored (crowd limit, count, zones list)",
+              monitoring.get("crowd", {}).get("threshold") == 3 and "count" in monitoring["crowd"] and isinstance(monitoring.get("zones"), list) and "fall_check" in monitoring, str(monitoring)[:200])
+        time.sleep(20)
+        check("one alert per crowded episode, not one per cycle", len(crowd_alerts(crowd)) == 1, str(len(crowd_alerts(crowd))))
+        check("an empty room never raises a crowd alert and counts zero", crowd_alerts(empty) == [] and (admin.get(f"/cameras/{empty}").json().get("monitoring") or {}).get("crowd", {}).get("count") == 0)
+        # Fire and smoke: the model runs on every camera; staged rooms contain neither, so nothing may be raised.
+        fire_on = (BACKEND / "models" / "fire_smoke_yolov8n.pt").is_file()  # default location; the test server uses default settings
+        status = (admin.get(f"/cameras/{crowd}").json().get("monitoring") or {}).get("fire")
+        check("the camera status exposes fire and smoke checking (or null when the model is absent)",
+              (set(status or {}) == {"fire", "smoke"} and {"seen", "hits", "needed", "active"} <= set(status["fire"])) if fire_on else status is None, str(status))
+        for kind in ("fire", "smoke"):
+            listing = admin.get("/alerts", params={"type": kind, "state": "all", "limit": 50})
+            check(f"the alerts API accepts type={kind} and the staged rooms raised none", listing.status_code == 200 and not [a for a in listing.json()["items"] if a["camera_id"] in (crowd, empty)], listing.text[:150])
+    finally:
+        for camera in (crowd, empty):
+            admin.delete(f"/cameras/{camera}")
+
+
+def test_network_camera(admin: Client) -> None:
+    section("Network camera (HTTP MJPEG stand-in for RTSP): connect, stream, drop, reconnect")
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    url = f"http://127.0.0.1:{port}/video"
+    feed = MjpegServer(port)
+    feed.start()
+    camera_id = None
+    try:
+        tested = admin.post("/cameras/test", json={"type": "http", "source": url}).json()
+        check("camera test opens the network stream and reports its size", tested.get("ok") is True and tested.get("width", 0) > 0, str(tested))
+        r = admin.post("/cameras", json={"name": "Network Camera", "type": "http", "source": url})
+        check("add a network camera", r.status_code == 201, r.text[:120])
+        camera_id = r.json().get("id")
+        check("network camera comes online", wait_until(lambda: admin.get(f"/cameras/{camera_id}").json()["status"] == "online", 30, 1) is not None)
+
+        stream = admin.http.get(f"{admin.base}/api/cameras/{camera_id}/stream", stream=True, timeout=15)
+        began, frames, buffer = time.time(), 0, b""
+        for chunk in stream.iter_content(chunk_size=8192):
+            buffer += chunk
+            frames += buffer.count(b"--frame")
+            buffer = buffer[-16:]  # a boundary may straddle two chunks
+            if time.time() - began >= 3:
+                break
+        stream.close()
+        check("its live stream runs smoothly (>= 10 frames/s from a 15 fps source)", frames / (time.time() - began) >= 10, f"{frames / (time.time() - began):.1f} fps")
+
+        feed.stop()
+        check("when the stream dies the camera goes offline (no hang)", wait_until(lambda: admin.get(f"/cameras/{camera_id}").json()["status"] == "offline", 40, 1) is not None)
+        outage = lambda: admin.get("/alerts", params={"type": "camera_offline", "camera_id": camera_id, "state": "open"}).json()["items"]
+        check("a camera-offline alert is raised", wait_until(outage, 30, 1) is not None)
+
+        feed.start()
+        check("when the stream returns the camera reconnects by itself", wait_until(lambda: admin.get(f"/cameras/{camera_id}").json()["status"] == "online", 45, 1) is not None)
+        check("and the outage alert resolves itself", wait_until(lambda: not outage(), 20, 1) is not None)
+    finally:
+        feed.stop()
+        if camera_id:
+            admin.delete(f"/cameras/{camera_id}")
 
 
 def main() -> int:
@@ -412,9 +565,16 @@ def main() -> int:
         test_suspicious_activity(admin, ids)
         test_alerts(server, admin, ids)
         test_dashboard(admin)
-        test_database_and_restart(server, admin, ids)
+        admin = test_database_and_restart(server, admin, ids)
+        test_network_camera(admin)
+        test_crowd_and_monitoring(admin, ids)
     finally:
         server.stop()
+    log = (workdir / "server.log").read_text(errors="replace")
+    section("Private data in the server log")
+    check("the camera password (rtsp://user:secret@...) is never logged", ":secret@" not in log and "user:secret" not in log)
+    check("a mistyped password in the username box is never logged", PASSWORD_CANARY not in log)
+    check("the administrator's password is never logged", ADMIN_PASSWORD not in log)
     failed = [r for r in RESULTS if not r[1]]
     print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} checks passed in {time.time() - began:.0f} s")
     for name, _, detail in failed:
