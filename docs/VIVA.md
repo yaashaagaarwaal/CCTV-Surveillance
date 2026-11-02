@@ -25,9 +25,33 @@ thread runs: lighting check → motion detection → (if motion) recording → Y
 face recognition → activity rules → alert. Alerts go to the database, to the browser over a WebSocket,
 and optionally to email.
 
-**Q. Why one thread per camera?**
-Isolation and simplicity: a bad camera or an exception stays inside its own thread, and the web server
+**Q. Why separate threads per camera, and why two?**
+Isolation and simplicity: a bad camera or an exception stays inside its own threads, and the web server
 stays responsive. Python's GIL is not a big problem because OpenCV and PyTorch release it while doing the heavy numeric work.
+Each camera has a *capture* thread (read a frame, draw the boxes, make the JPEG for the live view) and an
+*analysis* thread (motion, recording, YOLO, faces, rules). They are separate on purpose, see the next question.
+
+**Q. Your live video lagged at first. What was wrong and how did you fix it?**
+Two things, both found by measuring rather than guessing. (1) One thread did everything, so every YOLO or
+face cycle (60-230 ms) froze the picture, and a 1080p webcam frame already cost more than the 50 ms budget
+for 20 fps. (2) That thread also *slept* between reads to hold 20 fps, but cameras deliver 30; a driver that
+queues frames (RTSP/FFmpeg do) then piles up a backlog, and the picture fell more than a second behind.
+Fix: a light capture thread reads at the camera's own speed without ever sleeping or running a model, and
+a separate analysis thread always takes the *newest* frame and skips the ones it was too busy for. I also
+ask the webcam for 1280x720, which is plenty and cheaper. On a simulated 30 fps camera with real YOLO and
+face models running, the live picture went from 17.6 fps and up to 223 ms old (1.35 s old with a queueing
+camera) to 30 fps and about 8 ms old, with about the same number of YOLO runs (117 vs 118). A regression test now guards it.
+I could only simulate the camera: I did not have the real webcam hardware in the test environment.
+
+**Q. A stranger walked past but no unknown-person alert was raised. Is that a bug?**
+Not necessarily, and I checked rather than assumed. The alert needs a face that is clear enough to judge:
+at least 48 px wide, bright enough, and facing the camera, because a dark, small or sideways face also scores
+low for a person I *do* know. Such faces are reported as "not sure" instead of "unknown". I proved the rest of the
+chain works (three confirmations, cooldown, night rule, alert stored, event typed, pushed to the dashboard) with a
+test that stops at each stage. What was missing was *explanation*: the reason was never saved. Now each "not sure"
+records what was measured against which limit (for example "brightness 31, needs 40"), and the unknown-person alert
+states how many checks confirmed it and the similarity score. I did not lower any threshold, because that trades
+missed strangers for false alarms about the owner.
 
 **Q. What was the hardest part?**
 Reducing false alarms honestly: lighting changes looked like motion, a turned face looked like a stranger,
@@ -152,7 +176,7 @@ injection (my login check is a dependency), native async for streaming, and WebS
 
 **Q. Where do you use async and where normal functions?**
 The MJPEG stream and WebSocket are `async` (many viewers cost almost nothing). CPU-heavy work (face
-registration) is pushed to a thread pool so the stream isn't stalled. Camera processing is in plain background threads.
+registration) is pushed to a thread pool so the stream isn't stalled. Camera capture and analysis run in plain background threads.
 
 **Q. How are APIs protected?**
 Every router has a `current_user` dependency (cookie session); mutating routes need `require_admin`. A test walks all routes and fails if one is unprotected.
@@ -214,13 +238,22 @@ On the next start such events are closed out: `interrupted` if the file is reada
 ## 11. Event detection and alerts
 
 **Q. What is an event?**
-One recording. It starts on motion and is *upgraded* to the most serious thing seen: motion → person → suspicious → unknown person → restricted area. It ends 5 seconds after motion stops (max 30 s per clip; a long visit continues in the next clip).
+One recording. It starts on motion and is *upgraded* to the most serious thing seen: motion → person → suspicious → unknown person → restricted area → smoke → fire. It ends 5 seconds after motion stops (max 30 s per clip; a long visit continues in the next clip).
 
 **Q. What is an alert vs an event?**
 An event is "something was recorded". An alert is "someone should look" — with a type, a severity, a message, a snapshot, and an unread → read → resolved lifecycle. Every alert is created through one function, `raise_alert()`, which stores it, pushes it to the WebSocket and notifies channels.
 
 **Q. How do you avoid alert spam?**
 Cooldowns per rule, confirmation counts, and de-duplication: a camera outage creates one alert and resolves itself when the camera returns.
+
+**Q. How does fire and smoke detection work, and how much can you trust it?**
+A second small YOLOv8 model (fine-tuned on the public D-Fire dataset; classes *fire* and *smoke*) looks at each camera's newest frame once a second, on the analysis thread, so the live picture never waits for it (measured: 30 fps with and without it). One frame never alerts: fire needs 3 detections within 8 s, smoke 5 (and a higher confidence), one alert per episode, with a cooldown, through the same `raise_alert()` as every other alert, with a snapshot and a clip. Trust it as a *hint to go and look*, not as a fire alarm: it was never tested on real fire here, recall is unknown, and we found it calls out-of-focus grey backgrounds "smoke", which is why smoke is stricter.
+
+**Q. Why is smoke stricter than fire?**
+Because we measured it: on 401 frames with no fire, the model gave 15 smoke detections (0.51-0.74 confidence) on one clip with a blurry grey background and none anywhere else. Smoke is soft and shapeless, so it is the easier one to imagine. We set the smoke confidence to 0.60 and require 5 detections; this removes that false alarm but could also delay a real one, and we could not measure that without real smoke footage.
+
+**Q. What licence applies to the fire model?**
+The model card says AGPL-3.0, inherited from Ultralytics YOLOv8 (the person detector has the same licence). The licence of the D-Fire training data was not checked, so check it before redistributing or using the project commercially.
 
 ---
 
@@ -247,6 +280,24 @@ It only sees a rectangle (no pose), so it can miss falls (hidden, overhead camer
 
 ---
 
+**Q. How does crowd counting work, and is the number exact?**
+No, and the app says so. YOLO draws one box per person it can see. I merge duplicate boxes (a box mostly inside a stronger one is the same person),
+count the distinct people whose feet are in the picture or in a chosen zone, and show the median of the last five detection cycles so a one-cycle glitch
+cannot make a crowd. An alert needs *at least N people for S seconds*, one per crowded episode with a cooldown, and it is worded "at least N" because people who
+overlap or stand behind each other are missed. A standard detector cannot count a dense crowd; that needs a density-estimation model. I measured the
+effect of merging on a staged clip with four people: without it the detector's boxes made the count 7 and a limit of five fired; with it the count stayed at four.
+
+**Q. Did night enhancement actually help? How do you know?**
+I measured it instead of assuming (`scripts/night_benchmark.py`): the same clip at falling brightness with real YOLO. Enhancement costs about 2.5 ms a frame and helps
+exactly where raw detection starts failing (85 % to 97 % of frames at 6 % exposure, 37 % to 65 % with heavy noise), and does nothing once the picture is near black.
+It added no people to an empty dark room. It also showed a flaw: the "keep whichever pass finds more people" rule could prefer a pass that merely drew a second
+box round one person, so duplicates are now merged first. The footage is a darkened copy of a normal clip, not a real night camera, and I have not tested infrared hardware.
+
+**Q. What happens to a timer if the camera drops out?**
+Nothing is known about the gap, so it must not be bridged. When a camera is lost the activity monitor is told: visits in progress end, the person tracker and crowd timer
+reset, and a person still there afterwards starts a fresh visit, so an outage can never turn 6 s plus a gap plus 6 s into a 10 s loiter. Entries already counted towards
+"repeated entry" are kept. A test proves it and fails if that call is removed.
+
 ## 13. Security and remote access
 
 **Q. Is it safe to expose?**
@@ -264,6 +315,29 @@ An end-to-end script starts the real server on a temporary database, adds the de
 
 **Q. Did you measure accuracy?**
 For night detection and face similarity, yes, on test data (see README). I did not run a large formal benchmark; results depend on your cameras and lighting.
+
+**Q. You say it is reliable. How did you check, and what did the check find?**
+A final audit ran the real server for 20 minutes with seven cameras (six staged video files with rules, one unreachable RTSP camera) and checked the outcome:
+160 alerts, none closer together than their cooldown, none from the empty room, every one with a snapshot and a recording, no error or database lock in the log, and a viewer refused 11 of 11 administrative actions.
+It also found real defects, which I fixed and covered with tests that fail without the fix:
+(1) a person who walks in *during the 10-second cooldown after a recording* and then stands still produced no motion, so nothing started watching them and no loitering alert fired (1 loitering alert where 4 were expected);
+(2) a password mistyped into the username box was written to the log;
+(3) a photo that declared gigapixels could force a multi-gigabyte decode;
+(4) the crowd counter lost people standing close together at the normal detector size.
+
+**Q. Does the AI slow the video down?**
+Measured on a simulated 30 fps camera with the real models: the live picture stayed at 29-30 fps with a 95th-percentile picture age under 10 ms even with face recognition and crowd counting running, while a single AI cycle took up to 0.29 s.
+That is by design: capture and analysis are separate threads, so the AI can be slow without ever delaying the picture. Crowd counting cost about 3 CPU points; face recognition about 5.
+
+**Q. How accurate is the crowd count, and why does a crowd camera use a bigger detector input?**
+I built frames with a known number of people and counted them. At the normal input size (320 px) people standing shoulder to shoulder were lost (eight people counted as four on average); at 640 px, after merging duplicate boxes, the count was exactly right in every non-overlapping frame for 3, 4, 6 and 8 people, for about 6 ms more per detection.
+Once people overlap the count falls fast (eight people overlapping by half average 3.5), so the app always says "at least N". This is the best case: clean cut-outs on a plain room.
+
+**Q. How long between something happening and the alert?**
+Measured by playing staged clips in real time and comparing with the earliest moment the footage allows: 0.9-1.2 s for a zone intrusion, 0.7 s for loitering, 0.6 s for a crowd. That is two confirming detection cycles, the median over five cycles for the crowd, and a recording starting. Pushing the alert to the browser added a median 2 ms.
+
+**Q. What have you NOT tested on real hardware?**
+Everything with a camera was tested in simulation, because no webcam or phone was available to the test environment: capture from a real webcam, a phone as a camera, infrared hardware, face recognition on real cameras, and a real person at a real angle. Staged clips use cut-out people on a plain room. I also did not run a multi-day soak or a dependency vulnerability scan.
 
 ---
 

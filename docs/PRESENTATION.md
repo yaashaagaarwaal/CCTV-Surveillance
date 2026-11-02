@@ -46,7 +46,7 @@ Your name · Roll number · Guide's name · College · Year
 **A local AI pipeline: motion → person → face → rules → alert.**
 
 * Cheap motion detection decides *when* to look; YOLO decides *what* is there; a face model decides *who*; clear rules decide *whether to alert*.
-* One Python backend (FastAPI + OpenCV) processes every camera in its own thread and stores everything in SQLite and local files.
+* One Python backend (FastAPI + OpenCV) processes every camera in its own threads (one to keep the live picture smooth, one for the AI) and stores everything in SQLite and local files.
 * A React dashboard shows live video, events, recordings and real-time alerts.
 * Security is built in: login, roles, hashed passwords, CSRF protection, and a deployment plan that never exposes the machine directly.
 
@@ -56,7 +56,7 @@ Your name · Roll number · Guide's name · College · Year
 
 ```text
  Cameras (webcam · RTSP/IP · HTTP · video files)
-        │ one thread per camera
+        │ per camera: capture thread + analysis thread
         ▼
  ┌──────────────────────── Processing pipeline ────────────────────────┐
  │ Lighting → Motion (MOG2) → Recording → YOLOv8n → Face → Rules → Alert│
@@ -93,7 +93,7 @@ Remote access: **browser → VPN / HTTPS proxy → FastAPI on 127.0.0.1** (never
 
 | # | Module | Responsibility |
 |---|---|---|
-| 1 | **Camera manager** | Opens each source, runs one worker thread per camera, reconnects automatically, reports status |
+| 1 | **Camera manager** | Opens each source, runs a capture thread (live picture at camera speed) and an analysis thread (AI on the newest frame) per camera, reconnects automatically, reports status |
 | 2 | **Motion detection** | OpenCV MOG2 background subtraction with noise, shadow and lighting-jump handling |
 | 3 | **Person detection** | Shared YOLOv8n model, "person" class only |
 | 4 | **Face recognition** | Face detection, embeddings, known / unknown / not-sure decision, unknown-person tracker |
@@ -184,9 +184,15 @@ stored as binary vectors, not photos; automatic schema upgrade at start-up.
 
 | Level | How | Result |
 |---|---|---|
-| **End-to-end system test** | Starts the real server on a temporary database, adds 4 video cameras + 1 broken one, then checks the whole system through the API | **116 / 116 checks passed** |
-| **Rule tests** | Each suspicious-activity rule with positive and negative cases and a controlled clock; deliberately broken rules to prove the tests catch them | **16 / 16 passed** |
+| **End-to-end system test** | Starts the real server on a temporary database, adds 4 video cameras + 1 broken one, then checks the whole system through the API | **143 / 143 checks passed** |
+| **Rule tests** | Each suspicious-activity rule with positive and negative cases and a controlled clock, including camera interruptions and tracker loss; deliberately broken rules to prove the tests catch them | **21 / 21 passed** |
+| **Crowd tests** | Duplicate boxes merged, count in a zone, the over-the-limit timer, one alert per episode, cooldown, detector input size | **17 / 17 passed** |
+| **Staged-clip tests** | Six generated clips (empty room, zone entry, loitering, crowd, repeated entry, low light) through the real pipeline with real YOLO, positive and negative, plus a second visit inside the cooldown | **7 / 7 passed** |
+| **Security-hardening tests** | Nothing private in the log, oversize uploads refused, stored paths confined to storage | **4 / 4 passed** |
+| **Soak test** | Real server, 7 cameras, 20 minutes, 160 alerts: duplicates, false alerts, WebSocket delivery, evidence, viewer restrictions, credential leaks, errors | **15 / 15 checks passed** |
+| **Night-mode tests** | Day / low-light / infrared classification, hysteresis, enhancement, and a benchmark of the same footage at falling brightness | **6 / 6 passed** |
 | **Pipeline test** | Scripted people through the real motion → recording → detection pipeline | **3 / 3 passed** |
+| **Live-video smoothness test** | A simulated 30 fps camera that queues frames, plus a slow AI; checks the live picture stays current and smooth | **3 / 3 passed** (the old design failed it) |
 | **Security test** | Walks every route: login required, writes need admin | **3 / 3 passed** (49 route/method combinations) |
 | **Frontend** | Lint + production build; manual walkthrough of every page | clean |
 | **Clean-install test** | New virtualenv + `npm ci` from the pinned files | pass |
@@ -204,10 +210,14 @@ unprotected routes in an earlier version; a false motion event when lights switc
 | Motion → person → recording | Every demo camera produced a person event with a playable, seekable MP4 |
 | Person confidence | ~90–96 % on the demo footage (day and night) |
 | Face recognition | Same person 0.64–0.96 similarity; different person 0.02–0.27; unknown person alerted only after 3 confirmations |
-| Night detection | People found in ~97 % / 83 % / 56 % of moderate / dark / very dark frames (raw only: 97 / 82 / 21 %) |
+| Night detection | Benchmark on the same clip at falling brightness: 100 % of frames down to 12 % exposure; at 6 % the enhanced pass lifts detection from 85 % to 97 %, and from 37 % to 65 % with heavy noise; 0 % in near-black. No false people in an empty dark room. Darkened video, not a real night camera; infrared hardware untested |
 | Suspicious-activity rules | All 5 rules fire correctly, with explanation, severity, snapshot and recording |
 | Alerts | Stored, filterable, real-time over WebSocket, one alert per camera outage (auto-resolved) |
-| Security | 100 % of routes require login; throttling, CSRF and role checks verified |
+| Security | 100 % of routes require login; throttling, CSRF and role checks verified. An audit found and fixed a password-in-the-log leak and an oversize-upload risk; a viewer was refused 11 of 11 admin actions; no camera password reached any log |
+| Live video | 29–30 fps with a picture age under 10 ms (p95) while YOLO, face recognition and crowd counting run (simulated 30 fps 720p camera, Apple M3) |
+| Alert latency | 0.6–1.2 s after the earliest moment the footage allows (zone, loitering, crowd), measured on staged clips in real time |
+| Crowd counting | Exact for 3–8 people standing apart, but falls as people overlap (8 people overlapping by half: average 3.5), so it is reported as "at least N" |
+| Soak | 20 minutes, 7 cameras, 160 alerts: no duplicate alert, no false alert in an empty room, no error, no database lock; memory steady (730–1,010 MB) |
 | Reliability | Clean Ctrl+C, data intact after restart, no recording left half-written |
 
 Present these as *measured on the test setup*, not as general accuracy claims.
@@ -219,7 +229,10 @@ Present these as *measured on the test setup*, not as general accuracy claims.
 * Face recognition is statistical — not 100 % accurate, no spoof (photo) protection.
 * Night detection is weaker; enhancement cannot recover lost information.
 * "Suspicious" = configurable rules, not understanding of intent; fall-like rule is experimental.
-* YOLOv8n is the smallest model; detection only runs when there is motion.
+* YOLOv8n is the smallest model; analysis starts on motion, so a person already standing still when the system starts is not analysed until something moves.
+* A crowd count is a lower bound: overlapping people are missed.
+* Everything with a camera was tested in simulation: no real webcam, phone camera or infrared camera was available to the tests; staged clips use cut-out people on a plain room.
+* Not done: a multi-day soak, a dependency vulnerability scan, Safari / Firefox testing.
 * MJPEG streaming is bandwidth-heavy and has no audio; SQLite and one machine limit scale.
 * No automatic deletion of old recordings, no mobile app or push notifications yet.
 
