@@ -31,3 +31,6 @@ backend/models/*.onnx
 # Secrets and local config — never commit
 backend/.env
 backend/data/.secret_key
+
+claude.md
+

@@ -1,4 +1,4 @@
-# 🛡️ Sentinel AI – Smart AI-Based Home CCTV Surveillance System
+# 🛡️ Smart AI-Based Home CCTV Surveillance System
 
 ### Transforming Traditional CCTV Cameras into Intelligent Security Systems
 
