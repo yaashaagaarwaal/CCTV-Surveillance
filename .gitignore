@@ -32,5 +32,5 @@ backend/models/*.onnx
 backend/.env
 backend/data/.secret_key
 
-claude.md
+CLAUDE.md
 

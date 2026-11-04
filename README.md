@@ -8,6 +8,22 @@ Unlike traditional CCTV systems that simply record footage, Sentinel AI aims to 
 
 ---
 
+## 📸 Project Screenshots
+
+Explore Sentinel AI through the following application previews.
+
+### 1. Web Page
+![Sentinel AI Dashboard](screenshots/dashboard.png)
+
+### 2. Live CCTV Monitoring
+![Live CCTV Monitoring](screenshots/live-monitoring.png)
+
+### 3. Features
+![Features](screenshots/features.png)
+
+### 4. Login Page
+![Login Page](screenshots/Login.png)
+
 ## 🚀 Key Features
 
 - **Real-Time Video Monitoring:** Monitor live video streams using connected cameras and mobile camera feeds.
